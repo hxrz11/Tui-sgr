@@ -1,0 +1,5 @@
+textual
+rich
+requests
+psycopg2-binary
+python-dotenv
