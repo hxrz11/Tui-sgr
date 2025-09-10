@@ -130,7 +130,7 @@ def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str) -> Tuple[dict, dict]:
+def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict]:
     """Возвращает (plan_json, meta)."""
     user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
@@ -151,6 +151,7 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
     resp = requests.post(url, json=body, timeout=180)
     resp.raise_for_status()
     data = resp.json()
+    write_log(log_file, "llm_response_raw", data)
     raw = (data.get("response") or "").strip()
 
     json_text = raw
@@ -161,12 +162,23 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
         plan = json.loads(json_text)
     except json.JSONDecodeError:
         if '"' not in json_text and "'" in json_text:
-            plan = json.loads(json_text.replace("'", '"'))
+            try:
+                plan = json.loads(json_text.replace("'", '"'))
+            except json.JSONDecodeError:
+                write_log(log_file, "llm_response_invalid", {"raw": json_text})
+                snippet = json_text[:200]
+                raise ValueError(f"LLM JSON parse error. Snippet: {snippet}")
         else:
-            raise
+            write_log(log_file, "llm_response_invalid", {"raw": json_text})
+            snippet = json_text[:200]
+            raise ValueError(f"LLM JSON parse error. Snippet: {snippet}")
 
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
-        raise ValueError("LLM response must be a dict with 'steps' list")
+        write_log(log_file, "llm_response_invalid", {"raw": json_text})
+        snippet = json_text[:200]
+        raise ValueError(
+            "LLM response must be a dict with 'steps' list. Snippet: " + snippet
+        )
 
     meta = {
         "model": data.get("model", MODEL_NAME),
@@ -243,7 +255,7 @@ class PipelineCLI:
         self.log_plan(f"Вопрос: {q}")
         self.log_plan("Запрашиваю у LLM план действий…")
         try:
-            plan, meta = call_ollama_plan(q)
+            plan, meta = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
