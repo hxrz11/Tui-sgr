@@ -130,7 +130,15 @@ def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str) -> Tuple[dict, dict]:
+class LLMResponseError(Exception):
+    """Raised when LLM returns an invalid plan response."""
+
+    def __init__(self, message: str, raw_snippet: str) -> None:
+        super().__init__(message)
+        self.raw_snippet = raw_snippet
+
+
+def call_ollama_plan(question: str, log_file: Optional[str] = None) -> Tuple[dict, dict]:
     """Возвращает (plan_json, meta)."""
     user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
@@ -163,10 +171,16 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
         if '"' not in json_text and "'" in json_text:
             plan = json.loads(json_text.replace("'", '"'))
         else:
-            raise
+            snippet = raw[:200]
+            if log_file:
+                write_log(log_file, "llm_response_invalid", {"raw": raw, "snippet": snippet})
+            raise LLMResponseError("LLM response is not valid JSON", snippet)
 
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
-        raise ValueError("LLM response must be a dict with 'steps' list")
+        snippet = raw[:200]
+        if log_file:
+            write_log(log_file, "llm_response_invalid", {"raw": raw, "snippet": snippet})
+        raise LLMResponseError("LLM response must be a dict with 'steps' list", snippet)
 
     meta = {
         "model": data.get("model", MODEL_NAME),
@@ -243,7 +257,7 @@ class PipelineCLI:
         self.log_plan(f"Вопрос: {q}")
         self.log_plan("Запрашиваю у LLM план действий…")
         try:
-            plan, meta = call_ollama_plan(q)
+            plan, meta = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
@@ -280,9 +294,15 @@ class PipelineCLI:
             plan_view.close()
 
             self.log_plan("Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).")
+        except LLMResponseError as e:
+            snippet = getattr(e, "raw_snippet", "")
+            write_log(self.log_file, "error", {"stage": "plan", "error": str(e), "snippet": snippet})
+            self.log_plan(
+                f"Ошибка построения плана: {e}\nСниппет ответа LLM: {snippet}\nПолный ответ в логе: {self.log_file}"
+            )
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
-            self.log_plan(f"Ошибка построения плана: {e}")
+            self.log_plan(f"Ошибка построения плана: {e}\nСм. лог: {self.log_file}")
 
     def run(self) -> None:
         print("=== Procurement Pipeline (console) ===")
