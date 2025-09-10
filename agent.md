@@ -186,7 +186,7 @@ python procure_pipeline_tui/main_console.py
 
 ## Архитектура и файлы
 
-- `procure_pipeline_tui/main_console.py` — консольный CLI: проверки окружения, ввод вопроса, план от LLM, вывод метаданных.
+- `procure_pipeline_tui/main_console.py` — **входная точка консольной версии**: проверки окружения, ввод вопроса, план от LLM, вывод метаданных.
 - `./logs/` — JSONL-журналы.
 
 ---
