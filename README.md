@@ -1,12 +1,12 @@
-# Procurement Pipeline TUI
+# Procurement Pipeline Console CLI
 
-Консольный TUI для построения плана анализа закупок.
+Консольный CLI для построения плана анализа закупок.
 
 ## Подготовка окружения
 
 1. Установите зависимости:
    ```bash
-   pip install -r requirements.txt
+   pip install requests psycopg2-binary python-dotenv
    ```
 2. Создайте файл `.env` (можно скопировать из `.example.env`) и заполните переменные окружения:
    - `OLLAMA_URL` – URL сервера Ollama (по умолчанию `http://localhost:11434`)
@@ -17,7 +17,7 @@
 ## Запуск
 
 ```bash
-python procure_pipeline_tui/main_tui.py
+python procure_pipeline_tui/main_console.py
 ```
 
-Приложение проверит соединение с Postgres и Ollama, предложит ввести вопрос и построит план в формате JSON.
+Скрипт проверит соединение с Postgres и Ollama, попросит ввести вопрос в консоли и выведет полученный от модели план в формате JSON.

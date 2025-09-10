@@ -158,7 +158,7 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
 # Console workflow
 # ------------------------------
 
-class PipelineTUI:
+class PipelineCLI:
     def __init__(self) -> None:
         self.session_id: str = new_session_id()
         self.log_file: str = log_path(self.session_id)
@@ -245,4 +245,4 @@ class PipelineTUI:
 
 
 if __name__ == "__main__":
-    PipelineTUI().run()
+    PipelineCLI().run()
