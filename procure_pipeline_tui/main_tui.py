@@ -242,13 +242,13 @@ class PipelineTUI(App):
 
     # helpers to write into logs
     def log_checks(self, text: str):
-        self.query_one(Log, id="checks").write(text)
+        self.query_one("#checks", Log).write(text)
 
     def log_plan(self, text: str):
-        self.query_one(Log, id="plan_log").write(text)
+        self.query_one("#plan_log", Log).write(text)
 
     def log_meta(self, text: str):
-        self.query_one(Log, id="meta_log").write(text)
+        self.query_one("#meta_log", Log).write(text)
 
     def on_mount(self):
         # init session
@@ -258,7 +258,7 @@ class PipelineTUI(App):
         # run checks
         self.run_checks()
         # focus input
-        self.query_one(Input, id="question").focus()
+        self.query_one("#question", Input).focus()
 
     def run_checks(self):
         self.log_checks("[b]DB:[/b] проверка соединения …")
@@ -291,19 +291,19 @@ class PipelineTUI(App):
         self.session_id = new_session_id()
         self.log_file = log_path(self.session_id)
         write_log(self.log_file, "session", {"session_id": self.session_id})
-        self.query_one(Log, id="checks").clear()
-        self.query_one(Log, id="plan_log").clear()
-        self.query_one(Log, id="meta_log").clear()
+        self.query_one("#checks", Log).clear()
+        self.query_one("#plan_log", Log).clear()
+        self.query_one("#meta_log", Log).clear()
         self.plan = None
         self.llm_meta = None
-        self.query_one(Button, id="next").disabled = True
-        self.query_one(Button, id="abort").disabled = True
+        self.query_one("#next", Button).disabled = True
+        self.query_one("#abort", Button).disabled = True
         self.run_checks()
-        self.query_one(Input, id="question").value = ""
-        self.query_one(Input, id="question").focus()
+        self.query_one("#question", Input).value = ""
+        self.query_one("#question", Input).focus()
 
     async def do_start(self):
-        q = self.query_one(Input, id="question").value.strip()
+        q = self.query_one("#question", Input).value.strip()
         if not q:
             self.bell()
             return
@@ -342,8 +342,8 @@ class PipelineTUI(App):
             self.log_meta(f"[b]response_chars:[/b] {meta.get('response_chars')}")
 
             # enable controls
-            self.query_one(Button, id="next").disabled = False
-            self.query_one(Button, id="abort").disabled = False
+            self.query_one("#next", Button).disabled = False
+            self.query_one("#abort", Button).disabled = False
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
             self.log_plan(f"[red]Ошибка построения плана: {e}[/red]")
