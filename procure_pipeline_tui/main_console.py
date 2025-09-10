@@ -196,74 +196,87 @@ class PipelineCLI:
     # environment checks
     def run_checks(self) -> None:
         self.dashboard.set_stage("Environment")
-        self.dashboard.update_status("Environment", "DB: проверка соединения …")
+
+        # DB check
+        self.dashboard.start_pipeline_step("DB check")
+        self.dashboard.set_current_activity("DB: проверка соединения …")
         ok, msg = db_check(POSTGRES_DSN)
         icon = "✅" if ok else "❌"
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
-        self.dashboard.update_status("Environment", f"DB: {icon} {msg}")
+        self.dashboard.set_current_activity(f"DB: {icon} {msg}")
+        self.dashboard.finish_pipeline_step("DB check")
+        self.dashboard.mark_plan_step_done("DB check")
 
-        self.dashboard.update_status("Environment", "Ollama: проверка …")
+        # Ollama check
+        self.dashboard.start_pipeline_step("Ollama check")
+        self.dashboard.set_current_activity("Ollama: проверка …")
         ok2, msg2, info = ollama_check(OLLAMA_URL, MODEL_NAME)
         icon = "✅" if ok2 else "❌"
         self.llm_ok, self.llm_msg, self.llm_model_info = ok2, msg2, info
         write_log(self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info})
-        self.dashboard.update_status("Environment", f"Ollama: {icon} {msg2}")
+        self.dashboard.set_current_activity(f"Ollama: {icon} {msg2}")
+        self.dashboard.finish_pipeline_step("Ollama check")
+        self.dashboard.mark_plan_step_done("Ollama check")
         if info:
-            self.dashboard.update_status(
-                "Environment",
-                f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}",
+            self.dashboard.set_current_activity(
+                f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}"
             )
 
     # main action
     def do_start(self) -> None:
         if not self.db_ok or not self.llm_ok:
-            self.dashboard.update_status(
-                "Environment", "Проверки не пройдены. Исправьте окружение и попробуйте снова."
+            self.dashboard.set_current_activity(
+                "Проверки не пройдены. Исправьте окружение и попробуйте снова."
             )
             return
+
         self.dashboard.set_stage("Schema/Plan Generation")
-        self.dashboard.update_status(
-            "Schema/Plan Generation", f"Модель: {MODEL_NAME}"
-        )
-        self.dashboard.update_status(
-            "Schema/Plan Generation", "Опции: {'temperature': 0.1, 'num_ctx': 8192}"
-        )
+
+        # Question input
+        self.dashboard.start_pipeline_step("Question")
         q = self.dashboard.ask("Введите точный вопрос: ").strip()
+        self.dashboard.finish_pipeline_step("Question")
+        self.dashboard.mark_plan_step_done("Question")
         if not q:
-            self.dashboard.update_status(
-                "Schema/Plan Generation", "Вопрос пустой, ничего не делаем."
-            )
+            self.dashboard.set_current_activity("Вопрос пустой, ничего не делаем.")
             return
         self.question = q
         write_log(self.log_file, "question", {"text": q})
-        self.dashboard.update_status("Schema/Plan Generation", f"Вопрос: {q}")
-        self.dashboard.update_status(
-            "Schema/Plan Generation", "Запрашиваю у LLM план действий…"
-        )
+        self.dashboard.set_current_activity(f"Вопрос: {q}")
+
+        # Plan request
+        self.dashboard.start_pipeline_step("Plan")
+        self.dashboard.set_current_activity("Запрашиваю у LLM план действий…")
         try:
             plan, meta, previews = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
             write_log(self.log_file, "llm_meta", meta)
-            self.dashboard.update_status("Schema/Plan Generation", "План (JSON):")
-            self.dashboard.update_status(
-                "Schema/Plan Generation", json.dumps(plan, ensure_ascii=False, indent=2)
-            )
+            self.dashboard.finish_pipeline_step("Plan")
+            self.dashboard.mark_plan_step_done("Plan")
+            self.dashboard.set_current_activity("План получен")
             self.dashboard.update_meta(meta)
             self.dashboard.set_plan_preview(previews)
-            self.dashboard.update_status(
-                "Schema/Plan Generation",
-                "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).",
+            self.dashboard.set_plan_steps(
+                [f"{s.get('id', i + 1)}. {s.get('title', '')}" for i, s in enumerate(plan.get("steps", []))]
+            )
+            self.dashboard.set_current_activity(
+                "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL)."
             )
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
-            self.dashboard.update_status(
-                "Schema/Plan Generation", f"Ошибка построения плана: {e}"
-            )
+            self.dashboard.finish_pipeline_step("Plan")
+            self.dashboard.set_current_activity(f"Ошибка построения плана: {e}")
 
     def run(self) -> None:
+        self.dashboard.set_plan_steps([
+            "DB check",
+            "Ollama check",
+            "Question",
+            "Plan",
+        ])
         self.run_checks()
         self.do_start()
         self.dashboard.close()
