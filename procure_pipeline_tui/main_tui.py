@@ -41,7 +41,7 @@ from psycopg2.extras import RealDictCursor
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
 from textual.widgets import (
-    Header, Footer, Button, Input, Static, TextLog, DataTable, Label,
+    Header, Footer, Button, Input, Static, Log, DataTable, Label,
     Tabs, TabbedContent, TabPane,
 )
 from textual.reactive import reactive
@@ -227,13 +227,13 @@ class PipelineTUI(App):
         with Horizontal(id="main"):
             with Vertical(id="left"):
                 yield Static("[b]Проверки[/b]\n", id="chk_title")
-                yield TextLog(id="checks", highlight=True, wrap=True)
+                yield Log(id="checks", highlight=True)
             with Vertical(id="center"):
                 yield Static("[b]План[/b]", id="plan_title")
-                yield TextLog(id="plan_log", highlight=True, wrap=True)
+                yield Log(id="plan_log", highlight=True)
             with Vertical(id="right"):
                 yield Static("[b]LLM мета[/b]", id="meta_title")
-                yield TextLog(id="meta_log", highlight=True, wrap=True)
+                yield Log(id="meta_log", highlight=True)
         with Horizontal(id="controls"):
             yield Button("▶ Далее", id="next", disabled=True)
             yield Button("⛔ Прервать", id="abort", disabled=True)
@@ -242,13 +242,13 @@ class PipelineTUI(App):
 
     # helpers to write into logs
     def log_checks(self, text: str):
-        self.query_one(TextLog, id="checks").write(text)
+        self.query_one(Log, id="checks").write(text)
 
     def log_plan(self, text: str):
-        self.query_one(TextLog, id="plan_log").write(text)
+        self.query_one(Log, id="plan_log").write(text)
 
     def log_meta(self, text: str):
-        self.query_one(TextLog, id="meta_log").write(text)
+        self.query_one(Log, id="meta_log").write(text)
 
     def on_mount(self):
         # init session
@@ -291,9 +291,9 @@ class PipelineTUI(App):
         self.session_id = new_session_id()
         self.log_file = log_path(self.session_id)
         write_log(self.log_file, "session", {"session_id": self.session_id})
-        self.query_one(TextLog, id="checks").clear()
-        self.query_one(TextLog, id="plan_log").clear()
-        self.query_one(TextLog, id="meta_log").clear()
+        self.query_one(Log, id="checks").clear()
+        self.query_one(Log, id="plan_log").clear()
+        self.query_one(Log, id="meta_log").clear()
         self.plan = None
         self.llm_meta = None
         self.query_one(Button, id="next").disabled = True
