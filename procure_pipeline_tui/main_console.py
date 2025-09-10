@@ -13,10 +13,12 @@ import json
 import uuid
 import datetime as dt
 from typing import Any, Optional, Tuple
+import time
 
 import requests
 import psycopg2
 from dotenv import load_dotenv
+from plan_view import PlanView
 
 # ------------------------------
 # Config
@@ -237,6 +239,17 @@ class PipelineCLI:
             self.log_meta(f"eval_duration: {ed if ed is not None else 'n/a'}")
             self.log_meta(f"prompt_chars: {meta.get('prompt_chars')}")
             self.log_meta(f"response_chars: {meta.get('response_chars')}")
+
+            plan_view = PlanView(plan.get("steps", []))
+            for step in plan.get("steps", []):
+                sid = step.get("id")
+                plan_view.set_current(sid)
+                plan_view.refresh()
+                time.sleep(0.1)
+                plan_view.mark_done(sid)
+                plan_view.refresh()
+            plan_view.close()
+
             self.log_plan("Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).")
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
