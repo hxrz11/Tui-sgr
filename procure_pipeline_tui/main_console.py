@@ -18,7 +18,13 @@ import time
 import requests
 import psycopg2
 from dotenv import load_dotenv
+import rich
+from rich.panel import Panel
 from plan_view import PlanView
+
+
+# Rich console for colored output
+console = rich.console.Console()
 
 # ------------------------------
 # Config
@@ -184,15 +190,15 @@ class PipelineCLI:
         self.plan: Optional[dict] = None
         self.llm_meta: Optional[dict] = None
 
-    # logging helpers -> stdout
+    # logging helpers -> stdout with colored panels
     def log_checks(self, text: str) -> None:
-        print(text)
+        console.print(Panel(text, title="Checks", border_style="green"))
 
     def log_plan(self, text: str) -> None:
-        print(text)
+        console.print(Panel(text, title="Plan", border_style="blue"))
 
     def log_meta(self, text: str) -> None:
-        print(text)
+        console.print(Panel(text, title="LLM Meta", border_style="magenta"))
 
     # environment checks
     def run_checks(self) -> None:
