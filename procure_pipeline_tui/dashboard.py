@@ -194,9 +194,6 @@ class Dashboard:
             {"name": name, "status": "pending", "duration": None} for name in steps
         ]
         self._layout["plan"].update(self._render_plan_panel())
-        if self._key_thread is None:
-            self._key_thread = threading.Thread(target=self._key_listener, daemon=True)
-            self._key_thread.start()
 
     def mark_plan_step_done(self, step: str, duration_ns: int | None = None) -> None:
         """Mark a plan step as completed and optionally record its duration."""
@@ -209,8 +206,25 @@ class Dashboard:
         self._layout["plan"].update(self._render_plan_panel())
 
     def ask(self, prompt: str) -> str:
-        """Request input from the user via the dashboard console."""
-        return self._live.console.input(prompt)
+        """Request input from the user via the dashboard console.
+
+        If the key listener is active (used for navigating the plan preview),
+        it temporarily stops it so that normal line input works as expected.
+        This allows the user to see their typing before pressing Enter.
+        """
+        was_running = False
+        if self._key_thread and self._key_thread.is_alive():
+            self._stop_event.set()
+            self._key_thread.join()
+            self._key_thread = None
+            self._stop_event = threading.Event()
+            was_running = True
+        try:
+            return self._live.console.input(prompt)
+        finally:
+            if was_running:
+                self._key_thread = threading.Thread(target=self._key_listener, daemon=True)
+                self._key_thread.start()
 
     # ------------------------------------------------------------------
     # Plan preview controls
