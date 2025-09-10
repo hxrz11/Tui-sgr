@@ -18,13 +18,13 @@ import time
 import requests
 import psycopg2
 from dotenv import load_dotenv
-import rich
 from rich.panel import Panel
+from rich.console import Console
 from plan_view import PlanView
 
 
 # Rich console for colored output
-console = rich.console.Console()
+console = Console()
 
 # ------------------------------
 # Config
