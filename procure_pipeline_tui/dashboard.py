@@ -19,7 +19,7 @@ from rich.tree import Tree
 
 
 class Dashboard:
-    """Simple dashboard with header, step tree and metrics panel."""
+    """Simple dashboard with pipeline plan, plan preview and center area."""
 
     def __init__(self) -> None:
         self.stage: str = "Init"
@@ -33,13 +33,21 @@ class Dashboard:
         self._key_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
+        # Build layout: top area split into pipeline plan (left) and plan (right),
+        # bottom area named "center" for future use.
         self._layout = Layout()
-        self._layout.split(Layout(name="header", size=3), Layout(name="body"))
-        self._layout["body"].split_row(Layout(name="left"), Layout(name="right", size=40))
+        self._layout.split_column(
+            Layout(name="top", ratio=2),
+            Layout(name="center", ratio=1),
+        )
+        self._layout["top"].split_row(
+            Layout(name="pipeline_plan"),
+            Layout(name="plan", size=40),
+        )
 
-        self._layout["header"].update(self._render_header())
-        self._layout["left"].update(self._render_statuses())
-        self._layout["right"].update(self._render_right_panel())
+        self._layout["pipeline_plan"].update(self._render_pipeline_plan())
+        self._layout["plan"].update(self._render_plan_panel())
+        self._layout["center"].update(self._render_center())
 
         self._live = Live(self._layout, refresh_per_second=4)
         self._live.__enter__()
@@ -47,10 +55,6 @@ class Dashboard:
     # ------------------------------------------------------------------
     # Rendering helpers
     # ------------------------------------------------------------------
-    def _render_header(self) -> Panel:
-        text = f"Procurement Pipeline\nStage: {self.stage}"
-        return Panel(text, style="bold white on blue", expand=True)
-
     def _render_statuses(self) -> Tree:
         tree = Tree("Steps")
         for block, messages in self.statuses.items():
@@ -58,6 +62,10 @@ class Dashboard:
             for msg in messages:
                 branch.add(msg)
         return tree
+
+    def _render_pipeline_plan(self) -> Panel:
+        tree = self._render_statuses()
+        return Panel(tree, title=f"Stage: {self.stage}")
 
     def _render_meta(self) -> Table:
         table = Table(show_header=False, box=None)
@@ -77,7 +85,7 @@ class Dashboard:
         syntax = Syntax(content, "json", theme="monokai", word_wrap=True)
         return Panel(syntax, title=title, border_style="cyan")
 
-    def _render_right_panel(self) -> Panel:
+    def _render_plan_panel(self) -> Panel:
         if self.active_tab == "meta":
             body = self._render_meta()
         else:
@@ -88,6 +96,9 @@ class Dashboard:
             else "Metrics | [bold]JSON Preview[/bold]"
         )
         return Panel(body, title=tabs, border_style="magenta")
+
+    def _render_center(self) -> Panel:
+        return Panel("", border_style="green")
 
     @staticmethod
     def _format_duration(ns: int) -> str:
@@ -102,11 +113,11 @@ class Dashboard:
     # ------------------------------------------------------------------
     def set_stage(self, stage: str) -> None:
         self.stage = stage
-        self._layout["header"].update(self._render_header())
+        self._layout["pipeline_plan"].update(self._render_pipeline_plan())
 
     def update_status(self, block: str, message: str) -> None:
         self.statuses.setdefault(block, []).append(message)
-        self._layout["left"].update(self._render_statuses())
+        self._layout["pipeline_plan"].update(self._render_pipeline_plan())
 
     def update_meta(self, meta: Dict[str, int | float | str | None]) -> None:
         for k, v in meta.items():
@@ -116,7 +127,7 @@ class Dashboard:
                 self.meta[k] = self._format_duration(v)
             else:
                 self.meta[k] = str(v)
-        self._layout["right"].update(self._render_right_panel())
+        self._layout["plan"].update(self._render_plan_panel())
 
     def ask(self, prompt: str) -> str:
         """Request input from the user via the dashboard console."""
@@ -130,7 +141,7 @@ class Dashboard:
         self.plan_steps = steps
         self.current_step = 0
         self.active_tab = "json"
-        self._layout["right"].update(self._render_right_panel())
+        self._layout["plan"].update(self._render_plan_panel())
         if self._key_thread is None:
             self._key_thread = threading.Thread(target=self._key_listener, daemon=True)
             self._key_thread.start()
@@ -147,7 +158,7 @@ class Dashboard:
                 ch = sys.stdin.read(1)
                 if ch == "\t":
                     self.active_tab = "json" if self.active_tab == "meta" else "meta"
-                    self._layout["right"].update(self._render_right_panel())
+                    self._layout["plan"].update(self._render_plan_panel())
                 elif ch == "\x1b":
                     seq = sys.stdin.read(2)
                     if seq == "[C":
@@ -161,13 +172,13 @@ class Dashboard:
         if not self.plan_steps:
             return
         self.current_step = (self.current_step + 1) % len(self.plan_steps)
-        self._layout["right"].update(self._render_right_panel())
+        self._layout["plan"].update(self._render_plan_panel())
 
     def prev_step(self) -> None:
         if not self.plan_steps:
             return
         self.current_step = (self.current_step - 1) % len(self.plan_steps)
-        self._layout["right"].update(self._render_right_panel())
+        self._layout["plan"].update(self._render_plan_panel())
 
     def close(self) -> None:
         self._stop_event.set()
