@@ -94,6 +94,15 @@ def write_log(path: str, kind: str, payload: Any) -> None:
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+
+def format_duration(ns: int) -> str:
+    """Format nanoseconds into human friendly seconds or minutes."""
+    seconds = ns / 1_000_000_000
+    if seconds >= 60:
+        minutes = seconds / 60
+        return f"{minutes:.2f} min"
+    return f"{seconds:.2f} s"
+
 def db_check(dsn: str) -> Tuple[bool, str]:
     try:
         conn = psycopg2.connect(dsn)
@@ -250,9 +259,12 @@ class PipelineCLI:
             ped = meta.get("prompt_eval_duration")
             self.log_meta(f"prompt_eval_count: {pec if pec is not None else 'n/a'}")
             self.log_meta(f"eval_count: {ec if ec is not None else 'n/a'}")
-            self.log_meta(f"total_duration: {td if td is not None else 'n/a'}")
-            self.log_meta(f"prompt_eval_duration: {ped if ped is not None else 'n/a'}")
-            self.log_meta(f"eval_duration: {ed if ed is not None else 'n/a'}")
+            td_fmt = format_duration(td) if td is not None else 'n/a'
+            ped_fmt = format_duration(ped) if ped is not None else 'n/a'
+            ed_fmt = format_duration(ed) if ed is not None else 'n/a'
+            self.log_meta(f"total_duration: {td_fmt}")
+            self.log_meta(f"prompt_eval_duration: {ped_fmt}")
+            self.log_meta(f"eval_duration: {ed_fmt}")
             self.log_meta(f"prompt_chars: {meta.get('prompt_chars')}")
             self.log_meta(f"response_chars: {meta.get('response_chars')}")
 
