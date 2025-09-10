@@ -130,8 +130,8 @@ def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str) -> Tuple[dict, dict]:
-    """Возвращает (plan_json, meta)."""
+def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict]:
+    """Возвращает (plan_json, meta) и логирует запрос."""
     user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
@@ -148,6 +148,7 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
             },
         },
     }
+    write_log(log_file, "llm_request", {"url": url, "body": body})
     resp = requests.post(url, json=body, timeout=180)
     resp.raise_for_status()
     data = resp.json()
@@ -243,7 +244,7 @@ class PipelineCLI:
         self.log_plan(f"Вопрос: {q}")
         self.log_plan("Запрашиваю у LLM план действий…")
         try:
-            plan, meta = call_ollama_plan(q)
+            plan, meta = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
