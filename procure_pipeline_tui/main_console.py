@@ -12,7 +12,7 @@ import os
 import json
 import uuid
 import datetime as dt
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, List, Dict
 
 import requests
 import psycopg2
@@ -117,8 +117,8 @@ def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict]:
-    """Возвращает (plan_json, meta) и логирует запрос."""
+def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dict[str, str]]]:
+    """Возвращает (plan_json, meta, steps_preview) и логирует запрос."""
     user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
@@ -156,6 +156,11 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict]:
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         raise ValueError("LLM response must be a dict with 'steps' list")
 
+    previews: List[Dict[str, str]] = []
+    for i, step in enumerate(plan.get("steps", [])):
+        step_id = step.get("id", str(i + 1))
+        previews.append({"id": step_id, "json": json.dumps(step, ensure_ascii=False, indent=2)})
+
     meta = {
         "model": data.get("model", MODEL_NAME),
         "options": body.get("options"),
@@ -167,7 +172,7 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict]:
         "prompt_chars": len(body.get("prompt", "")),
         "response_chars": len(raw),
     }
-    return plan, meta
+    return plan, meta, previews
 
 # ------------------------------
 # Console workflow
@@ -237,7 +242,7 @@ class PipelineCLI:
             "Schema/Plan Generation", "Запрашиваю у LLM план действий…"
         )
         try:
-            plan, meta = call_ollama_plan(q, self.log_file)
+            plan, meta, previews = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
@@ -247,6 +252,7 @@ class PipelineCLI:
                 "Schema/Plan Generation", json.dumps(plan, ensure_ascii=False, indent=2)
             )
             self.dashboard.update_meta(meta)
+            self.dashboard.set_plan_preview(previews)
             self.dashboard.update_status(
                 "Schema/Plan Generation",
                 "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).",
