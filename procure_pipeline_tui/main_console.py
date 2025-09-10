@@ -20,7 +20,7 @@ import psycopg2
 from dotenv import load_dotenv
 from rich.panel import Panel
 from rich.console import Console
-from plan_view import PlanView
+from plan_view import PlanProgress
 
 
 # Rich console for colored output
@@ -270,15 +270,13 @@ class PipelineCLI:
             self.log_meta(f"response_chars: {meta.get('response_chars')}")
 
             steps = plan["steps"]
-            plan_view = PlanView(steps)
+            progress = PlanProgress(steps)
             for step in steps:
                 sid = step.get("id")
-                plan_view.set_current(sid)
-                plan_view.refresh()
+                progress.set_current(sid)
                 time.sleep(0.1)
-                plan_view.mark_done(sid)
-                plan_view.refresh()
-            plan_view.close()
+                progress.mark_done(sid)
+            progress.close()
 
             self.log_plan("Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).")
         except Exception as e:
