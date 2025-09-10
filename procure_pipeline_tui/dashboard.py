@@ -29,6 +29,9 @@ class Dashboard:
         self.meta: Dict[str, str] = {}
         self.pipeline_steps: Dict[str, Dict[str, int | None]] = {}
 
+        # current activity for center panel
+        self.current_activity: str = ""
+
         # plan preview state
         self.plan_steps: List[Dict[str, Any]] = []  # {id, json}
         self.current_step: int = 0
@@ -131,7 +134,8 @@ class Dashboard:
         return Panel(body, title=tabs, border_style="magenta")
 
     def _render_center(self) -> Panel:
-        return Panel("", border_style="green")
+        """Render panel with current activity only."""
+        return Panel(self.current_activity, border_style="green")
 
     @staticmethod
     def _format_duration(ns: int) -> str:
@@ -151,6 +155,11 @@ class Dashboard:
     def update_status(self, block: str, message: str) -> None:
         self.statuses.setdefault(block, []).append(message)
         self._layout["pipeline_plan"].update(self._render_pipeline_plan())
+
+    def set_current_activity(self, message: str) -> None:
+        """Set current activity message in center panel."""
+        self.current_activity = message
+        self._layout["center"].update(self._render_center())
 
     def start_pipeline_step(self, step: str) -> None:
         """Mark the start time of a pipeline step."""
