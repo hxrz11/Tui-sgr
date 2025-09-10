@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Procurement Pipeline — консольный вариант (Stage 0 → План).
 
-"""Procurement Pipeline — Console TUI (Stage 0 → Plan)
-
-Проверка доступности Postgres и Ollama (и наличия модели)
-
-Приглашение ввести вопрос
-
-LLM-запрос на построение ПЛАНА (макс. 3 шага)
-
-Показ плана в JSON и метрик LLM (модель/опции/токены если даны/тайминги)
-
-Пауза: кнопки «Далее» и «Прервать» (пока шагов дальше не делаем)
-
-Лог на каждый запуск: ./logs/<timestamp>_<session>.jsonl
-
-
-Зависимости: pip install textual rich requests psycopg2-binary python-dotenv
-Переменные окружения:
-  OLLAMA_URL   (по умолчанию http://localhost:11434)
-  MODEL_NAME   (по умолчанию llama3.1:70b-instruct-q4_K_M)
-  POSTGRES_DSN (по умолчанию postgresql://user:pass@localhost:5432/postgres)
-  LOG_DIR      (по умолчанию ./logs)
-Запуск: python procure_pipeline_tui/main_tui.py
-
-Примечание: это «суровый» MVP под «План». Следующий этап — Шаг1 (сбор SQL-запроса) поверх этого же TUI.
+Проверяет доступность Postgres и Ollama, запрашивает у пользователя
+вопрос и просит модель построить План (до 3 шагов).
+Все события логируются в ``./logs/<timestamp>_<session>.jsonl``.
 """
 from __future__ import annotations
 
@@ -32,20 +12,10 @@ import os
 import json
 import uuid
 import datetime as dt
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional, Tuple
 
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor
-
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import (
-    Header, Footer, Button, Input, Static, Log, DataTable, Label,
-    Tabs, TabbedContent, TabPane,
-)
-from textual.reactive import reactive
-
 from dotenv import load_dotenv
 
 # ------------------------------
@@ -116,7 +86,7 @@ def write_log(path: str, kind: str, payload: Any) -> None:
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-def db_check(dsn: str) -> tuple[bool, str]:
+def db_check(dsn: str) -> Tuple[bool, str]:
     try:
         conn = psycopg2.connect(dsn)
         try:
@@ -130,7 +100,7 @@ def db_check(dsn: str) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-def ollama_check(base_url: str, model: str) -> tuple[bool, str, Optional[dict]]:
+def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     try:
         resp = requests.get(base_url.rstrip('/') + "/api/tags", timeout=30)
         resp.raise_for_status()
@@ -143,8 +113,8 @@ def ollama_check(base_url: str, model: str) -> tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str) -> tuple[dict, dict]:
-    """Возвращает (plan_json, meta) где meta содержит модель/опции/метрики если есть."""
+def call_ollama_plan(question: str) -> Tuple[dict, dict]:
+    """Возвращает (plan_json, meta)."""
     user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
@@ -159,7 +129,6 @@ def call_ollama_plan(question: str) -> tuple[dict, dict]:
     data = resp.json()
     raw = (data.get("response") or "").strip()
 
-    # попытка вынуть голый JSON из возможных ```json оградителей
     json_text = raw
     if json_text.startswith("```"):
         json_text = json_text.strip("`\n ")
@@ -167,7 +136,6 @@ def call_ollama_plan(question: str) -> tuple[dict, dict]:
     try:
         plan = json.loads(json_text)
     except json.JSONDecodeError:
-        # запасной вариант: заменить одиночные кавычки
         if '"' not in json_text and "'" in json_text:
             plan = json.loads(json_text.replace("'", '"'))
         else:
@@ -176,143 +144,72 @@ def call_ollama_plan(question: str) -> tuple[dict, dict]:
     meta = {
         "model": data.get("model", MODEL_NAME),
         "options": body.get("options"),
-        # эти поля появляются в некоторых сборках ollama при stream=false
         "eval_count": data.get("eval_count"),
         "prompt_eval_count": data.get("prompt_eval_count"),
         "total_duration": data.get("total_duration"),
         "eval_duration": data.get("eval_duration"),
         "prompt_eval_duration": data.get("prompt_eval_duration"),
-        # бэкап-метрики
         "prompt_chars": len(body.get("prompt", "")),
         "response_chars": len(raw),
     }
     return plan, meta
 
 # ------------------------------
-# TUI App
+# Console workflow
 # ------------------------------
 
-class PipelineTUI(App):
-    CSS = """
-    Screen { layout: vertical; }
-    #top { height: 3; }
-    #main { height: 1fr; }
-    #left, #center, #right { border: round $surface; padding: 1 1; }
-    #left { width: 32; }
-    #center { width: 1fr; }
-    #right { width: 48; }
-    #controls { height: 3; }
-    .title { color: $text; }
-    """
-
-    session_id: reactive[str | None] = reactive(None)
-    log_file: reactive[str | None] = reactive(None)
-
-    db_ok: reactive[bool] = reactive(False)
-    db_msg: reactive[str] = reactive("")
-    llm_ok: reactive[bool] = reactive(False)
-    llm_msg: reactive[str] = reactive("")
-    llm_model_info: reactive[Optional[dict]] = reactive(None)
-
-    question: reactive[str] = reactive("")
-    plan: reactive[Optional[dict]] = reactive(None)
-    llm_meta: reactive[Optional[dict]] = reactive(None)
-
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with Horizontal(id="top"):
-            yield Label("Вопрос:")
-            yield Input(placeholder="Введите точный вопрос…", id="question")
-            yield Button("Старт", id="start", variant="primary")
-        with Horizontal(id="main"):
-            with Vertical(id="left"):
-                yield Static("[b]Проверки[/b]\n", id="chk_title")
-                yield Log(id="checks", highlight=True)
-            with Vertical(id="center"):
-                yield Static("[b]План[/b]", id="plan_title")
-                yield Log(id="plan_log", highlight=True)
-            with Vertical(id="right"):
-                yield Static("[b]LLM мета[/b]", id="meta_title")
-                yield Log(id="meta_log", highlight=True)
-        with Horizontal(id="controls"):
-            yield Button("▶ Далее", id="next", disabled=True)
-            yield Button("⛔ Прервать", id="abort", disabled=True)
-            yield Button("Очистить", id="clear")
-        yield Footer()
-
-    # helpers to write into logs
-    def log_checks(self, text: str):
-        self.query_one("#checks", Log).write(text)
-
-    def log_plan(self, text: str):
-        self.query_one("#plan_log", Log).write(text)
-
-    def log_meta(self, text: str):
-        self.query_one("#meta_log", Log).write(text)
-
-    def on_mount(self):
-        # init session
-        self.session_id = new_session_id()
-        self.log_file = log_path(self.session_id)
+class PipelineTUI:
+    def __init__(self) -> None:
+        self.session_id: str = new_session_id()
+        self.log_file: str = log_path(self.session_id)
         write_log(self.log_file, "session", {"session_id": self.session_id})
-        # run checks
-        self.run_checks()
-        # focus input
-        self.query_one("#question", Input).focus()
+        self.db_ok: bool = False
+        self.db_msg: str = ""
+        self.llm_ok: bool = False
+        self.llm_msg: str = ""
+        self.llm_model_info: Optional[dict] = None
+        self.question: str = ""
+        self.plan: Optional[dict] = None
+        self.llm_meta: Optional[dict] = None
 
-    def run_checks(self):
-        self.log_checks("[b]DB:[/b] проверка соединения …")
+    # logging helpers -> stdout
+    def log_checks(self, text: str) -> None:
+        print(text)
+
+    def log_plan(self, text: str) -> None:
+        print(text)
+
+    def log_meta(self, text: str) -> None:
+        print(text)
+
+    # environment checks
+    def run_checks(self) -> None:
+        self.log_checks("DB: проверка соединения …")
         ok, msg = db_check(POSTGRES_DSN)
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
-        self.log_checks(("[green]OK[/green]" if ok else "[red]FAIL[/red]") + f": {msg}")
+        self.log_checks(("OK" if ok else "FAIL") + f": {msg}")
 
-        self.log_checks(f"\n[b]Ollama:[/b] проверка …")
+        self.log_checks("\nOllama: проверка …")
         ok2, msg2, info = ollama_check(OLLAMA_URL, MODEL_NAME)
         self.llm_ok, self.llm_msg, self.llm_model_info = ok2, msg2, info
         write_log(self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info})
-        self.log_checks(("[green]OK[/green]" if ok2 else "[red]FAIL[/red]") + f": {msg2}")
+        self.log_checks(("OK" if ok2 else "FAIL") + f": {msg2}")
         if info:
             self.log_checks(f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}")
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        b = event.button
-        if b.id == "start":
-            await self.do_start()
-        elif b.id == "next":
-            self.log_plan("[yellow]Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).[/yellow]")
-        elif b.id == "abort":
-            self.reset()
-        elif b.id == "clear":
-            self.reset()
-
-    def reset(self):
-        # new session, clear logs
-        self.session_id = new_session_id()
-        self.log_file = log_path(self.session_id)
-        write_log(self.log_file, "session", {"session_id": self.session_id})
-        self.query_one("#checks", Log).clear()
-        self.query_one("#plan_log", Log).clear()
-        self.query_one("#meta_log", Log).clear()
-        self.plan = None
-        self.llm_meta = None
-        self.query_one("#next", Button).disabled = True
-        self.query_one("#abort", Button).disabled = True
-        self.run_checks()
-        self.query_one("#question", Input).value = ""
-        self.query_one("#question", Input).focus()
-
-    async def do_start(self):
-        q = self.query_one("#question", Input).value.strip()
+    # main action
+    def do_start(self) -> None:
+        q = input("Введите точный вопрос: ").strip()
         if not q:
-            self.bell()
+            self.log_plan("Вопрос пустой, ничего не делаем.")
             return
         if not self.db_ok or not self.llm_ok:
-            self.log_checks("[red]Проверки не пройдены. Исправьте окружение и попробуйте снова.[/red]")
+            self.log_checks("Проверки не пройдены. Исправьте окружение и попробуйте снова.")
             return
         self.question = q
         write_log(self.log_file, "question", {"text": q})
-        self.log_plan(f"[b]Вопрос:[/b] {q}")
+        self.log_plan(f"Вопрос: {q}")
         self.log_plan("Запрашиваю у LLM план действий…")
         try:
             plan, meta = call_ollama_plan(q)
@@ -320,33 +217,32 @@ class PipelineTUI(App):
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
             write_log(self.log_file, "llm_meta", meta)
-            # pretty print
-            self.log_plan("[b]План (JSON):[/b]")
+            self.log_plan("План (JSON):")
             self.log_plan(json.dumps(plan, ensure_ascii=False, indent=2))
-            # meta panel
-            self.log_meta("[b]Модель:[/b] " + str(meta.get("model")))
-            self.log_meta("[b]Опции:[/b] " + json.dumps(meta.get("options"), ensure_ascii=False))
-            # токены/тайминги если есть
+            self.log_meta("Модель: " + str(meta.get("model")))
+            self.log_meta("Опции: " + json.dumps(meta.get("options"), ensure_ascii=False))
             ec = meta.get("eval_count")
             pec = meta.get("prompt_eval_count")
             td = meta.get("total_duration")
             ed = meta.get("eval_duration")
             ped = meta.get("prompt_eval_duration")
-            self.log_meta(f"[b]prompt_eval_count:[/b] {pec if pec is not None else 'n/a'}")
-            self.log_meta(f"[b]eval_count:[/b] {ec if ec is not None else 'n/a'}")
-            self.log_meta(f"[b]total_duration:[/b] {td if td is not None else 'n/a'}")
-            self.log_meta(f"[b]prompt_eval_duration:[/b] {ped if ped is not None else 'n/a'}")
-            self.log_meta(f"[b]eval_duration:[/b] {ed if ed is not None else 'n/a'}")
-            # запасные метрики
-            self.log_meta(f"[b]prompt_chars:[/b] {meta.get('prompt_chars')}")
-            self.log_meta(f"[b]response_chars:[/b] {meta.get('response_chars')}")
-
-            # enable controls
-            self.query_one("#next", Button).disabled = False
-            self.query_one("#abort", Button).disabled = False
+            self.log_meta(f"prompt_eval_count: {pec if pec is not None else 'n/a'}")
+            self.log_meta(f"eval_count: {ec if ec is not None else 'n/a'}")
+            self.log_meta(f"total_duration: {td if td is not None else 'n/a'}")
+            self.log_meta(f"prompt_eval_duration: {ped if ped is not None else 'n/a'}")
+            self.log_meta(f"eval_duration: {ed if ed is not None else 'n/a'}")
+            self.log_meta(f"prompt_chars: {meta.get('prompt_chars')}")
+            self.log_meta(f"response_chars: {meta.get('response_chars')}")
+            self.log_plan("Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).")
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
-            self.log_plan(f"[red]Ошибка построения плана: {e}[/red]")
+            self.log_plan(f"Ошибка построения плана: {e}")
+
+    def run(self) -> None:
+        print("=== Procurement Pipeline (console) ===")
+        self.run_checks()
+        self.do_start()
+
 
 if __name__ == "__main__":
     PipelineTUI().run()
