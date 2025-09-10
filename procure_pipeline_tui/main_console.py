@@ -200,12 +200,14 @@ class PipelineCLI:
 
     # main action
     def do_start(self) -> None:
+        if not self.db_ok or not self.llm_ok:
+            self.log_checks("Проверки не пройдены. Исправьте окружение и попробуйте снова.")
+            return
+        self.log_plan(f"Модель: {MODEL_NAME}")
+        self.log_plan(f"Опции: {{'temperature': 0.1, 'num_ctx': 8192}}")
         q = input("Введите точный вопрос: ").strip()
         if not q:
             self.log_plan("Вопрос пустой, ничего не делаем.")
-            return
-        if not self.db_ok or not self.llm_ok:
-            self.log_checks("Проверки не пройдены. Исправьте окружение и попробуйте снова.")
             return
         self.question = q
         write_log(self.log_file, "question", {"text": q})
