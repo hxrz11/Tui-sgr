@@ -125,6 +125,13 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
         "system": SYSTEM_PROMPT,
         "stream": False,
         "options": {"temperature": 0.1, "num_ctx": 8192},
+        "response_format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"steps": {"type": "array"}},
+            },
+        },
     }
     resp = requests.post(url, json=body, timeout=180)
     resp.raise_for_status()
@@ -142,6 +149,9 @@ def call_ollama_plan(question: str) -> Tuple[dict, dict]:
             plan = json.loads(json_text.replace("'", '"'))
         else:
             raise
+
+    if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
+        raise ValueError("LLM response must be a dict with 'steps' list")
 
     meta = {
         "model": data.get("model", MODEL_NAME),
@@ -240,8 +250,9 @@ class PipelineCLI:
             self.log_meta(f"prompt_chars: {meta.get('prompt_chars')}")
             self.log_meta(f"response_chars: {meta.get('response_chars')}")
 
-            plan_view = PlanView(plan.get("steps", []))
-            for step in plan.get("steps", []):
+            steps = plan["steps"]
+            plan_view = PlanView(steps)
+            for step in steps:
                 sid = step.get("id")
                 plan_view.set_current(sid)
                 plan_view.refresh()
