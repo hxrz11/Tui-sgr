@@ -1,4 +1,4 @@
-textual
+textual>=0.61
 rich
 requests
 psycopg2-binary
