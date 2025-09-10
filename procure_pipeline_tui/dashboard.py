@@ -11,6 +11,7 @@ import threading
 import termios
 import time
 import tty
+from rich.console import Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -31,7 +32,11 @@ class Dashboard:
         # plan preview state
         self.plan_steps: List[Dict[str, Any]] = []  # {id, json}
         self.current_step: int = 0
-        self.active_tab: str = "meta"
+        self.active_tab: str = "plan"
+
+        # plan execution status
+        # [{"name": str, "status": str, "duration": int | None}]
+        self.plan_status: List[Dict[str, Any]] = []
         self._key_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -88,6 +93,21 @@ class Dashboard:
             table.add_row(str(k), str(v))
         return table
 
+    def _render_plan_status(self) -> Table:
+        table = Table(show_header=False, box=None)
+        for step in self.plan_status:
+            name = step.get("name", "")
+            status = step.get("status", "")
+            duration = step.get("duration")
+            if status == "done":
+                dur = f" ({self._format_duration(duration)})" if duration else ""
+                table.add_row(f"[green]{name}[/]", f"[green]{status}{dur}[/]")
+            else:
+                table.add_row(name, status)
+        if not self.plan_status:
+            table.add_row("No steps", "")
+        return table
+
     def _render_json_preview(self) -> Panel:
         if not self.plan_steps:
             content = "No plan"
@@ -101,15 +121,13 @@ class Dashboard:
         return Panel(syntax, title=title, border_style="cyan")
 
     def _render_plan_panel(self) -> Panel:
-        if self.active_tab == "meta":
-            body = self._render_meta()
-        else:
+        if self.active_tab == "json":
             body = self._render_json_preview()
-        tabs = (
-            "[bold]Metrics[/bold] | JSON Preview"
-            if self.active_tab == "meta"
-            else "Metrics | [bold]JSON Preview[/bold]"
-        )
+            tabs = "Plan | [bold]JSON Preview[/bold]"
+        else:
+            status_table = self._render_plan_status()
+            body = status_table if not self.meta else Group(self._render_meta(), status_table)
+            tabs = "[bold]Plan[/bold] | JSON Preview"
         return Panel(body, title=tabs, border_style="magenta")
 
     def _render_center(self) -> Panel:
@@ -161,6 +179,26 @@ class Dashboard:
                 self.meta[k] = str(v)
         self._layout["plan"].update(self._render_plan_panel())
 
+    def set_plan_steps(self, steps: List[str]) -> None:
+        """Initialize plan status entries for given step names."""
+        self.plan_status = [
+            {"name": name, "status": "pending", "duration": None} for name in steps
+        ]
+        self._layout["plan"].update(self._render_plan_panel())
+        if self._key_thread is None:
+            self._key_thread = threading.Thread(target=self._key_listener, daemon=True)
+            self._key_thread.start()
+
+    def mark_plan_step_done(self, step: str, duration_ns: int | None = None) -> None:
+        """Mark a plan step as completed and optionally record its duration."""
+        for info in self.plan_status:
+            if info.get("name") == step:
+                info["status"] = "done"
+                if duration_ns is not None:
+                    info["duration"] = duration_ns
+                break
+        self._layout["plan"].update(self._render_plan_panel())
+
     def ask(self, prompt: str) -> str:
         """Request input from the user via the dashboard console."""
         return self._live.console.input(prompt)
@@ -189,7 +227,7 @@ class Dashboard:
                     continue
                 ch = sys.stdin.read(1)
                 if ch == "\t":
-                    self.active_tab = "json" if self.active_tab == "meta" else "meta"
+                    self.active_tab = "json" if self.active_tab == "plan" else "plan"
                     self._layout["plan"].update(self._render_plan_panel())
                 elif ch == "\x1b":
                     seq = sys.stdin.read(2)
