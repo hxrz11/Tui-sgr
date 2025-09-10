@@ -229,7 +229,7 @@ class PipelineCLI:
         self.dashboard.update_status(
             "Schema/Plan Generation", "Опции: {'temperature': 0.1, 'num_ctx': 8192}"
         )
-        q = input("Введите точный вопрос: ").strip()
+        q = self.dashboard.ask("Введите точный вопрос: ").strip()
         if not q:
             self.dashboard.update_status(
                 "Schema/Plan Generation", "Вопрос пустой, ничего не делаем."

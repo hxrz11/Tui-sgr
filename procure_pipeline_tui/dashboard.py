@@ -118,6 +118,10 @@ class Dashboard:
                 self.meta[k] = str(v)
         self._layout["right"].update(self._render_right_panel())
 
+    def ask(self, prompt: str) -> str:
+        """Request input from the user via the dashboard console."""
+        return self._live.console.input(prompt)
+
     # ------------------------------------------------------------------
     # Plan preview controls
     # ------------------------------------------------------------------
