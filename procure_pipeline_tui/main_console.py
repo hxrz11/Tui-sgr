@@ -13,18 +13,13 @@ import json
 import uuid
 import datetime as dt
 from typing import Any, Optional, Tuple
-import time
 
 import requests
 import psycopg2
 from dotenv import load_dotenv
-from rich.panel import Panel
-from rich.console import Console
-from plan_view import PlanProgress
+from dashboard import Dashboard
 
 
-# Rich console for colored output
-console = Console()
 
 # ------------------------------
 # Config
@@ -94,14 +89,6 @@ def write_log(path: str, kind: str, payload: Any) -> None:
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-
-def format_duration(ns: int) -> str:
-    """Format nanoseconds into human friendly seconds or minutes."""
-    seconds = ns / 1_000_000_000
-    if seconds >= 60:
-        minutes = seconds / 60
-        return f"{minutes:.2f} min"
-    return f"{seconds:.2f} s"
 
 def db_check(dsn: str) -> Tuple[bool, str]:
     try:
@@ -199,94 +186,81 @@ class PipelineCLI:
         self.question: str = ""
         self.plan: Optional[dict] = None
         self.llm_meta: Optional[dict] = None
-
-    # logging helpers -> stdout with colored panels
-    def log_checks(self, text: str) -> None:
-        console.print(Panel(text, title="Checks", border_style="green"))
-
-    def log_plan(self, text: str) -> None:
-        console.print(Panel(text, title="Plan", border_style="blue"))
-
-    def log_meta(self, text: str) -> None:
-        console.print(Panel(text, title="LLM Meta", border_style="magenta"))
+        self.dashboard = Dashboard()
 
     # environment checks
     def run_checks(self) -> None:
-        self.log_checks("DB: проверка соединения …")
+        self.dashboard.set_stage("Environment")
+        self.dashboard.update_status("Environment", "DB: проверка соединения …")
         ok, msg = db_check(POSTGRES_DSN)
         icon = "✅" if ok else "❌"
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
-        self.log_checks(f"{icon} {msg}")
+        self.dashboard.update_status("Environment", f"DB: {icon} {msg}")
 
-        self.log_checks("\nOllama: проверка …")
+        self.dashboard.update_status("Environment", "Ollama: проверка …")
         ok2, msg2, info = ollama_check(OLLAMA_URL, MODEL_NAME)
         icon = "✅" if ok2 else "❌"
         self.llm_ok, self.llm_msg, self.llm_model_info = ok2, msg2, info
         write_log(self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info})
-        self.log_checks(f"{icon} {msg2}")
+        self.dashboard.update_status("Environment", f"Ollama: {icon} {msg2}")
         if info:
-            self.log_checks(f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}")
+            self.dashboard.update_status(
+                "Environment",
+                f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}",
+            )
 
     # main action
     def do_start(self) -> None:
         if not self.db_ok or not self.llm_ok:
-            self.log_checks("Проверки не пройдены. Исправьте окружение и попробуйте снова.")
+            self.dashboard.update_status(
+                "Environment", "Проверки не пройдены. Исправьте окружение и попробуйте снова."
+            )
             return
-        self.log_plan(f"Модель: {MODEL_NAME}")
-        self.log_plan(f"Опции: {{'temperature': 0.1, 'num_ctx': 8192}}")
+        self.dashboard.set_stage("Schema/Plan Generation")
+        self.dashboard.update_status(
+            "Schema/Plan Generation", f"Модель: {MODEL_NAME}"
+        )
+        self.dashboard.update_status(
+            "Schema/Plan Generation", "Опции: {'temperature': 0.1, 'num_ctx': 8192}"
+        )
         q = input("Введите точный вопрос: ").strip()
         if not q:
-            self.log_plan("Вопрос пустой, ничего не делаем.")
+            self.dashboard.update_status(
+                "Schema/Plan Generation", "Вопрос пустой, ничего не делаем."
+            )
             return
         self.question = q
         write_log(self.log_file, "question", {"text": q})
-        self.log_plan(f"Вопрос: {q}")
-        self.log_plan("Запрашиваю у LLM план действий…")
+        self.dashboard.update_status("Schema/Plan Generation", f"Вопрос: {q}")
+        self.dashboard.update_status(
+            "Schema/Plan Generation", "Запрашиваю у LLM план действий…"
+        )
         try:
             plan, meta = call_ollama_plan(q, self.log_file)
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
             write_log(self.log_file, "llm_meta", meta)
-            self.log_plan("План (JSON):")
-            self.log_plan(json.dumps(plan, ensure_ascii=False, indent=2))
-            self.log_meta("Модель: " + str(meta.get("model")))
-            self.log_meta("Опции: " + json.dumps(meta.get("options"), ensure_ascii=False))
-            ec = meta.get("eval_count")
-            pec = meta.get("prompt_eval_count")
-            td = meta.get("total_duration")
-            ed = meta.get("eval_duration")
-            ped = meta.get("prompt_eval_duration")
-            self.log_meta(f"prompt_eval_count: {pec if pec is not None else 'n/a'}")
-            self.log_meta(f"eval_count: {ec if ec is not None else 'n/a'}")
-            td_fmt = format_duration(td) if td is not None else 'n/a'
-            ped_fmt = format_duration(ped) if ped is not None else 'n/a'
-            ed_fmt = format_duration(ed) if ed is not None else 'n/a'
-            self.log_meta(f"total_duration: {td_fmt}")
-            self.log_meta(f"prompt_eval_duration: {ped_fmt}")
-            self.log_meta(f"eval_duration: {ed_fmt}")
-            self.log_meta(f"prompt_chars: {meta.get('prompt_chars')}")
-            self.log_meta(f"response_chars: {meta.get('response_chars')}")
-
-            steps = plan["steps"]
-            progress = PlanProgress(steps)
-            for step in steps:
-                sid = step.get("id")
-                progress.set_current(sid)
-                time.sleep(0.1)
-                progress.mark_done(sid)
-            progress.close()
-
-            self.log_plan("Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).")
+            self.dashboard.update_status("Schema/Plan Generation", "План (JSON):")
+            self.dashboard.update_status(
+                "Schema/Plan Generation", json.dumps(plan, ensure_ascii=False, indent=2)
+            )
+            self.dashboard.update_meta(meta)
+            self.dashboard.update_status(
+                "Schema/Plan Generation",
+                "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL).",
+            )
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
-            self.log_plan(f"Ошибка построения плана: {e}")
+            self.dashboard.update_status(
+                "Schema/Plan Generation", f"Ошибка построения плана: {e}"
+            )
 
     def run(self) -> None:
-        print("=== Procurement Pipeline (console) ===")
         self.run_checks()
         self.do_start()
+        self.dashboard.close()
 
 
 if __name__ == "__main__":
