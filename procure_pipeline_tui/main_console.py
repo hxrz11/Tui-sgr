@@ -186,15 +186,17 @@ class PipelineCLI:
     def run_checks(self) -> None:
         self.log_checks("DB: проверка соединения …")
         ok, msg = db_check(POSTGRES_DSN)
+        icon = "✅" if ok else "❌"
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
-        self.log_checks(("OK" if ok else "FAIL") + f": {msg}")
+        self.log_checks(f"{icon} {msg}")
 
         self.log_checks("\nOllama: проверка …")
         ok2, msg2, info = ollama_check(OLLAMA_URL, MODEL_NAME)
+        icon = "✅" if ok2 else "❌"
         self.llm_ok, self.llm_msg, self.llm_model_info = ok2, msg2, info
         write_log(self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info})
-        self.log_checks(("OK" if ok2 else "FAIL") + f": {msg2}")
+        self.log_checks(f"{icon} {msg2}")
         if info:
             self.log_checks(f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}")
 
