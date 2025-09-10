@@ -9,6 +9,7 @@ import select
 import sys
 import threading
 import termios
+import time
 import tty
 from rich.layout import Layout
 from rich.live import Live
@@ -25,6 +26,7 @@ class Dashboard:
         self.stage: str = "Init"
         self.statuses: Dict[str, List[str]] = {}
         self.meta: Dict[str, str] = {}
+        self.pipeline_steps: Dict[str, Dict[str, int | None]] = {}
 
         # plan preview state
         self.plan_steps: List[Dict[str, Any]] = []  # {id, json}
@@ -57,8 +59,21 @@ class Dashboard:
     # ------------------------------------------------------------------
     def _render_statuses(self) -> Tree:
         tree = Tree("Steps")
+        for step, times in self.pipeline_steps.items():
+            start = times.get("start")
+            end = times.get("end")
+            if start and end:
+                duration = times.get("duration") or end - start
+                label = f"[green]{step} ({self._format_duration(duration)})[/]"
+            else:
+                label = step
+            branch = tree.add(label)
+            for msg in self.statuses.get(step, []):
+                branch.add(msg)
         for block, messages in self.statuses.items():
-            branch = tree.add(f"[bold]{block}[/]")
+            if block in self.pipeline_steps:
+                continue
+            branch = tree.add(block)
             for msg in messages:
                 branch.add(msg)
         return tree
@@ -117,6 +132,23 @@ class Dashboard:
 
     def update_status(self, block: str, message: str) -> None:
         self.statuses.setdefault(block, []).append(message)
+        self._layout["pipeline_plan"].update(self._render_pipeline_plan())
+
+    def start_pipeline_step(self, step: str) -> None:
+        """Mark the start time of a pipeline step."""
+        self.pipeline_steps[step] = {"start": time.monotonic_ns(), "end": None, "duration": None}
+        self._layout["pipeline_plan"].update(self._render_pipeline_plan())
+
+    def finish_pipeline_step(self, step: str) -> None:
+        """Mark the end of a pipeline step and compute its duration."""
+        info = self.pipeline_steps.get(step)
+        if not info:
+            return
+        end = time.monotonic_ns()
+        info["end"] = end
+        start = info.get("start")
+        if start:
+            info["duration"] = end - start
         self._layout["pipeline_plan"].update(self._render_pipeline_plan())
 
     def update_meta(self, meta: Dict[str, int | float | str | None]) -> None:
