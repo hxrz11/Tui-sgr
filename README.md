@@ -13,6 +13,7 @@
    - `MODEL_NAME` – название модели LLM (по умолчанию `llama3.1:70b-instruct-q4_K_M`)
    - `POSTGRES_DSN` – строка подключения к Postgres
    - `LOG_DIR` – путь к каталогу для логов (по умолчанию `./logs`)
+   - `STATUS_API_URL` – базовый URL сервиса статусов закупок (по умолчанию `http://localhost:8000`)
 
 ## Запуск
 
