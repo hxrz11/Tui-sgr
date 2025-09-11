@@ -107,14 +107,25 @@ def run_with_spinner(label: str, func, *args, **kwargs):
 
     t = threading.Thread(target=spin)
     t.start()
+    ok = True
     try:
         result = func(*args, **kwargs)
+        if isinstance(result, bool):
+            ok = result
+        elif isinstance(result, tuple) and result:
+            ok = bool(result[0])
+    except Exception as e:
+        ok = False
+        result = e
     finally:
         done = True
         t.join()
         elapsed = time.monotonic() - start
         sys.stdout.write(" " * (len(label) + 4) + "\r")
-        print(f"[green]{label} — ok ({elapsed:.2f}s)[/green]")
+        tag = "[OK]" if ok else "[FAIL]"
+        print(f"{label} — {tag} ({elapsed:.2f}s)")
+    if not ok and isinstance(result, Exception):
+        raise result
     return result
 
 
