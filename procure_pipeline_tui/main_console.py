@@ -202,6 +202,15 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     }
     return plan, meta, previews
 
+
+def render_plan(plan: dict) -> None:
+    steps = [
+        f"{s.get('id', i + 1)}. {s.get('title', '')}"
+        for i, s in enumerate(plan.get("steps", []))
+    ]
+    for line in steps:
+        print(line)
+
 # ------------------------------
 # Console workflow
 # ------------------------------
@@ -270,12 +279,9 @@ class PipelineCLI:
             print("План получен")
             if meta:
                 print(f"Модель: {meta.get('model', 'n/a')}")
-            steps = [f"{s.get('id', i + 1)}. {s.get('title', '')}" for i, s in enumerate(plan.get("steps", []))]
-            for line in steps:
-                print(line)
-            print(
-                "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL)."
-            )
+            render_plan(plan)
+            print("Дальнейшие шаги в разработке. Стоп.")
+            sys.exit()
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
             print(f"Ошибка построения плана: {e}")
