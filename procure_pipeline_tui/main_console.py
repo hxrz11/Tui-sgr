@@ -12,6 +12,7 @@ import os
 import json
 import uuid
 import datetime as dt
+import textwrap
 from typing import Any, Optional, Tuple, List, Dict
 
 import requests
@@ -173,6 +174,19 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     }
     return plan, meta, previews
 
+
+def render_plan(plan: dict) -> str:
+    sep = "-" * 30
+    lines = [sep]
+    for i, step in enumerate(plan.get("steps", []), 1):
+        lines.append(f"шаг{i}: {step.get('title', '')}")
+        lines.append(step.get("description", ""))
+        sql = step.get("sql")
+        if sql:
+            lines.append(textwrap.dedent(sql).strip())
+        lines.append(sep)
+    return "\n".join(lines)
+
 # ------------------------------
 # Console workflow
 # ------------------------------
@@ -240,12 +254,10 @@ class PipelineCLI:
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
             write_log(self.log_file, "llm_meta", meta)
-            print("План получен")
+            print("План от llm получен!")
+            print(render_plan(plan))
             if meta:
                 print(f"Модель: {meta.get('model', 'n/a')}")
-            steps = [f"{s.get('id', i + 1)}. {s.get('title', '')}" for i, s in enumerate(plan.get("steps", []))]
-            for line in steps:
-                print(line)
             print(
                 "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL)."
             )
