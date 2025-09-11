@@ -13,6 +13,10 @@ import json
 import uuid
 import datetime as dt
 from typing import Any, Optional, Tuple, List, Dict
+import sys
+import time
+import threading
+from itertools import cycle
 
 import requests
 import psycopg2
@@ -87,6 +91,31 @@ def write_log(path: str, kind: str, payload: Any) -> None:
     entry = {"ts": now_iso(), "kind": kind, "payload": payload}
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def run_with_spinner(label: str, func, *args, **kwargs):
+    """Run ``func`` displaying a spinner with ``label`` until completion."""
+    spinner = cycle("|/-\\")
+    start = time.monotonic()
+    done = False
+
+    def spin() -> None:
+        while not done:
+            sys.stdout.write(f"{label} {next(spinner)}\r")
+            sys.stdout.flush()
+            time.sleep(0.1)
+
+    t = threading.Thread(target=spin)
+    t.start()
+    try:
+        result = func(*args, **kwargs)
+    finally:
+        done = True
+        t.join()
+        elapsed = time.monotonic() - start
+        sys.stdout.write(" " * (len(label) + 4) + "\r")
+        print(f"[green]{label} — ok ({elapsed:.2f}s)[/green]")
+    return result
 
 
 def db_check(dsn: str) -> Tuple[bool, str]:
@@ -195,21 +224,19 @@ class PipelineCLI:
     def run_checks(self) -> None:
         print("Environment checks")
 
-        # DB check
-        print("DB: проверка соединения …")
-        ok, msg = db_check(POSTGRES_DSN)
-        icon = "✅" if ok else "❌"
+        ok, msg = run_with_spinner(
+            "DB: проверка соединения", db_check, POSTGRES_DSN
+        )
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
-        print(f"DB: {icon} {msg}")
 
-        # Ollama check
-        print("Ollama: проверка …")
-        ok2, msg2, info = ollama_check(OLLAMA_URL, MODEL_NAME)
-        icon = "✅" if ok2 else "❌"
+        ok2, msg2, info = run_with_spinner(
+            "Ollama: проверка", ollama_check, OLLAMA_URL, MODEL_NAME
+        )
         self.llm_ok, self.llm_msg, self.llm_model_info = ok2, msg2, info
-        write_log(self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info})
-        print(f"Ollama: {icon} {msg2}")
+        write_log(
+            self.log_file, "ollama_check", {"ok": ok2, "msg": msg2, "model_info": info}
+        )
         if info:
             print(
                 f"Модель: {info.get('name')} | Сайз: {info.get('size', 'n/a')}"
@@ -232,10 +259,10 @@ class PipelineCLI:
         write_log(self.log_file, "question", {"text": q})
         print(f"Вопрос: {q}")
 
-        # Plan request
-        print("Запрашиваю у LLM план действий…")
         try:
-            plan, meta, _previews = call_ollama_plan(q, self.log_file)
+            plan, meta, _previews = run_with_spinner(
+                "Запрашиваю у LLM план действий", call_ollama_plan, q, self.log_file
+            )
             self.plan = plan
             self.llm_meta = meta
             write_log(self.log_file, "plan", plan)
