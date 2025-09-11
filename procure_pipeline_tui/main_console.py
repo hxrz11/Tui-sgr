@@ -260,7 +260,9 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     return plan, meta, previews
 
 
-def execute_sql(query: str, log_file: str, limit: int = 10) -> List[Dict[str, Any]]:
+def execute_sql(
+    query: str, log_file: str, limit: int = 10
+) -> Tuple[List[Dict[str, Any]], int]:
     """Выполняет безопасный SELECT к Postgres и логирует результат."""
     stripped = query.strip().strip(";")
     if not stripped.upper().startswith("SELECT"):
@@ -279,21 +281,30 @@ def execute_sql(query: str, log_file: str, limit: int = 10) -> List[Dict[str, An
     try:
         conn = psycopg2.connect(POSTGRES_DSN)
         with conn.cursor() as cur:
-            cur.execute(query)
+            cur.execute(stripped)
             rows = cur.fetchmany(limit)
             cols = [desc[0] for desc in cur.description]
             result = [dict(zip(cols, r)) for r in rows]
+
+            cur.execute(f"SELECT COUNT(*) FROM ({stripped}) t")
+            total_count = cur.fetchone()[0]
+
             write_log(
                 log_file,
                 "sql_exec",
-                {"query": query, "result": result, "error": None},
+                {
+                    "query": stripped,
+                    "result": result,
+                    "total_count": total_count,
+                    "error": None,
+                },
             )
-            return result
+            return result, total_count
     except Exception as e:
         write_log(
             log_file,
             "sql_exec",
-            {"query": query, "result": None, "error": str(e)},
+            {"query": stripped, "result": None, "error": str(e)},
         )
         raise
     finally:
@@ -403,7 +414,7 @@ class PipelineCLI:
                 sql_query = first_step.get("sql")
                 if sql_query:
                     try:
-                        rows = run_with_spinner(
+                        rows, total_count = run_with_spinner(
                             "Выполняю SQL", execute_sql, sql_query, self.log_file
                         )
                         if rows:
@@ -422,6 +433,9 @@ class PipelineCLI:
                             ]
                         else:
                             console.print("SQL не вернул данных.")
+                        console.print(
+                            f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
+                        )
                     except Exception as e:
                         write_log(
                             self.log_file,
