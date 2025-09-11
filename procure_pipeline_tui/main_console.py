@@ -37,6 +37,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama3.1:70b-instruct-q4_K_M")
 POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://user:pass@localhost:5432/postgres")
 LOG_DIR = os.getenv("LOG_DIR", "logs")
+STATUS_API_URL = os.getenv("STATUS_API_URL", "http://localhost:8000")
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -219,6 +220,15 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     return plan, meta, previews
 
 
+def fetch_statuses(card_id: str) -> dict:
+    """Выполняет GET запрос к STATUS_API_URL для получения таймлайна статусов."""
+    url = STATUS_API_URL.rstrip('/') + "/webhook/relay"
+    params = {"id": card_id}
+    resp = requests.get(url, params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def render_plan(plan: dict) -> None:
     sep = "-" * 30
     console.print(sep)
@@ -301,7 +311,42 @@ class PipelineCLI:
             write_log(self.log_file, "llm_meta", meta)
             print("План от llm получен!")
             render_plan(plan)
-            print("Дальнейшие шаги в разработке. Стоп.")
+            has_api = any(
+                step.get("type") == "api" for step in plan.get("steps", [])
+            )
+            if has_api:
+                while True:
+                    card_id = input(
+                        "Введите PurchaseCardId (пусто для завершения): "
+                    ).strip()
+                    if not card_id:
+                        break
+                    write_log(
+                        self.log_file,
+                        "status_api_request",
+                        {"card_id": card_id},
+                    )
+                    try:
+                        data = run_with_spinner(
+                            f"Статусы для {card_id}", fetch_statuses, card_id
+                        )
+                        write_log(
+                            self.log_file,
+                            "status_api_response",
+                            {"card_id": card_id, "response": data},
+                        )
+                        print(json.dumps(data, ensure_ascii=False, indent=2))
+                    except Exception as e:
+                        write_log(
+                            self.log_file,
+                            "error",
+                            {
+                                "stage": "status_api",
+                                "card_id": card_id,
+                                "error": str(e),
+                            },
+                        )
+                        print(f"Ошибка запроса статусов: {e}")
             return
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
