@@ -281,7 +281,7 @@ class PipelineCLI:
                 print(f"Модель: {meta.get('model', 'n/a')}")
             render_plan(plan)
             print("Дальнейшие шаги в разработке. Стоп.")
-            sys.exit()
+            return
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
             print(f"Ошибка построения плана: {e}")
