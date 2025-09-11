@@ -17,6 +17,7 @@ import sys
 import time
 import threading
 from itertools import cycle
+import re
 
 import requests
 import psycopg2
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 import sqlparse
 from rich.console import Console
 from rich.syntax import Syntax
+from rich.table import Table
 
 
 
@@ -258,6 +260,47 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     return plan, meta, previews
 
 
+def execute_sql(query: str, log_file: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Выполняет безопасный SELECT к Postgres и логирует результат."""
+    stripped = query.strip().strip(";")
+    if not stripped.upper().startswith("SELECT"):
+        raise ValueError("Запрос должен начинаться с SELECT")
+
+    pattern = re.compile(r"\bFROM\s+([^\s,;]+)|\bJOIN\s+([^\s,;]+)", re.IGNORECASE)
+    tables = set()
+    for match in pattern.finditer(stripped):
+        tbl = match.group(1) or match.group(2)
+        if tbl and not tbl.startswith("("):
+            tables.add(tbl.strip())
+    if tables and tables != {"public.\"PurchaseAllView\""}:
+        raise ValueError('Разрешена только таблица public."PurchaseAllView"')
+
+    conn = None
+    try:
+        conn = psycopg2.connect(POSTGRES_DSN)
+        with conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchmany(limit)
+            cols = [desc[0] for desc in cur.description]
+            result = [dict(zip(cols, r)) for r in rows]
+            write_log(
+                log_file,
+                "sql_exec",
+                {"query": query, "result": result, "error": None},
+            )
+            return result
+    except Exception as e:
+        write_log(
+            log_file,
+            "sql_exec",
+            {"query": query, "result": None, "error": str(e)},
+        )
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+
 def fetch_statuses(card_id: str) -> dict:
     """Выполняет GET запрос к STATUS_API_URL для получения таймлайна статусов."""
     url = STATUS_API_URL.rstrip('/') + "/webhook/relay"
@@ -349,20 +392,49 @@ class PipelineCLI:
             write_log(self.log_file, "llm_meta", meta)
             print("План от llm получен!")
             render_plan(plan)
-            has_api = any(
-                step.get("type") == "api" for step in plan.get("steps", [])
-            )
-            if has_api:
-                while True:
-                    card_id = input(
-                        "Введите PurchaseCardId (пусто для завершения): "
-                    ).strip()
-                    if not card_id:
-                        break
+
+            card_ids: List[str] = []
+            steps_list = plan.get("steps", [])
+            if steps_list:
+                first_step = steps_list[0]
+            else:
+                first_step = {}
+            if first_step.get("type") == "sql":
+                sql_query = first_step.get("sql")
+                if sql_query:
+                    try:
+                        rows = run_with_spinner(
+                            "Выполняю SQL", execute_sql, sql_query, self.log_file
+                        )
+                        if rows:
+                            table = Table(show_header=True, header_style="bold")
+                            for col in rows[0].keys():
+                                table.add_column(col)
+                            for row in rows:
+                                table.add_row(
+                                    *[str(row.get(col, "")) for col in rows[0].keys()]
+                                )
+                            console.print(table)
+                            card_ids = [
+                                str(r.get("PurchaseCardId"))
+                                for r in rows
+                                if r.get("PurchaseCardId")
+                            ]
+                        else:
+                            console.print("SQL не вернул данных.")
+                    except Exception as e:
+                        write_log(
+                            self.log_file,
+                            "error",
+                            {"stage": "sql_exec", "error": str(e)},
+                        )
+                        console.print(f"Ошибка выполнения SQL: {e}")
+
+            has_api = any(step.get("type") == "api" for step in steps_list)
+            if has_api and card_ids:
+                for card_id in card_ids:
                     write_log(
-                        self.log_file,
-                        "status_api_request",
-                        {"card_id": card_id},
+                        self.log_file, "status_api_request", {"card_id": card_id}
                     )
                     try:
                         data = run_with_spinner(
@@ -385,6 +457,8 @@ class PipelineCLI:
                             },
                         )
                         print(f"Ошибка запроса статусов: {e}")
+            elif has_api:
+                print("PurchaseCardId не найдены, API шаг пропущен.")
             return
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
