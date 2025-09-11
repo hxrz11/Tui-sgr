@@ -135,14 +135,29 @@ def run_with_spinner(label: str, func, *args, **kwargs):
     return result
 
 
-def db_check(dsn: str) -> Tuple[bool, str]:
+def db_check(dsn: str, log_file: str) -> Tuple[bool, str]:
+    query = "SELECT 1"
     try:
         conn = psycopg2.connect(dsn)
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                row = cur.fetchone()
-                ok = (row is not None and row[0] == 1)
+                try:
+                    cur.execute(query)
+                    row = cur.fetchone()
+                    result_val = row[0] if row else None
+                    write_log(
+                        log_file,
+                        "sql_exec",
+                        {"query": query, "result": result_val, "error": None},
+                    )
+                    ok = result_val == 1
+                except Exception as e:
+                    write_log(
+                        log_file,
+                        "sql_exec",
+                        {"query": query, "result": None, "error": str(e)},
+                    )
+                    raise
         finally:
             conn.close()
         return ok, "OK"
@@ -267,7 +282,7 @@ class PipelineCLI:
         print("Environment checks")
 
         ok, msg = run_with_spinner(
-            "DB: проверка соединения", db_check, POSTGRES_DSN
+            "DB: проверка соединения", db_check, POSTGRES_DSN, self.log_file
         )
         self.db_ok, self.db_msg = ok, msg
         write_log(self.log_file, "db_check", {"ok": ok, "msg": msg})
