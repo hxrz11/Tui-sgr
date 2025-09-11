@@ -21,6 +21,9 @@ from itertools import cycle
 import requests
 import psycopg2
 from dotenv import load_dotenv
+import sqlparse
+from rich.console import Console
+from rich.syntax import Syntax
 
 
 
@@ -36,6 +39,8 @@ POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://user:pass@localhost:5432/
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 
 os.makedirs(LOG_DIR, exist_ok=True)
+
+console = Console()
 
 # ------------------------------
 # Prompts
@@ -214,17 +219,20 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     return plan, meta, previews
 
 
-def render_plan(plan: dict) -> str:
+def render_plan(plan: dict) -> None:
     sep = "-" * 30
-    lines = [sep]
+    console.print(sep)
     for i, step in enumerate(plan.get("steps", []), 1):
-        lines.append(f"шаг{i}: {step.get('title', '')}")
-        lines.append(step.get("description", ""))
+        console.print(f"шаг{i}: {step.get('title', '')}")
+        console.print(step.get("description", ""))
         sql = step.get("sql")
         if sql:
-            lines.append(sql.strip())
-        lines.append(sep)
-    return "\n".join(lines)
+            formatted = sqlparse.format(
+                sql, reindent=True, keyword_case="upper"
+            )
+            syntax = Syntax(formatted, "sql", theme="monokai")
+            console.print(syntax)
+        console.print(sep)
 
 # ------------------------------
 # Console workflow
@@ -292,7 +300,7 @@ class PipelineCLI:
             write_log(self.log_file, "plan", plan)
             write_log(self.log_file, "llm_meta", meta)
             print("План от llm получен!")
-            print(render_plan(plan))
+            render_plan(plan)
             print("Дальнейшие шаги в разработке. Стоп.")
             return
         except Exception as e:
