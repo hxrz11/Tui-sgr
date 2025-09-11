@@ -181,22 +181,45 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
         },
     }
     write_log(log_file, "llm_request", {"url": url, "body": body})
-    resp = requests.post(url, json=body, timeout=180)
-    resp.raise_for_status()
-    data = resp.json()
-    raw = (data.get("response") or "").strip()
 
-    json_text = raw
-    if json_text.startswith("```"):
-        json_text = json_text.strip("`\n ")
-        json_text = json_text.replace("json\n", "").replace("javascript\n", "")
+    resp = requests.post(url, json=body, timeout=180)
+    status_code = resp.status_code
+    resp_text = resp.text
+    write_log(
+        log_file,
+        "llm_response",
+        {"status_code": status_code, "text": resp_text},
+    )
     try:
-        plan = json.loads(json_text)
+        resp.raise_for_status()
+        data = resp.json()
+        raw = (data.get("response") or "").strip()
+
+        json_text = raw
+        if json_text.startswith("```"):
+            json_text = json_text.strip("`\n ")
+            json_text = json_text.replace("json\n", "").replace("javascript\n", "")
+        try:
+            plan = json.loads(json_text)
+        except json.JSONDecodeError:
+            if '"' not in json_text and "'" in json_text:
+                plan = json.loads(json_text.replace("'", '"'))
+            else:
+                raise
+    except requests.HTTPError:
+        write_log(
+            log_file,
+            "llm_response_error",
+            {"status_code": status_code, "text": resp_text},
+        )
+        raise
     except json.JSONDecodeError:
-        if '"' not in json_text and "'" in json_text:
-            plan = json.loads(json_text.replace("'", '"'))
-        else:
-            raise
+        write_log(
+            log_file,
+            "llm_response_error",
+            {"status_code": status_code, "text": resp_text},
+        )
+        raise
 
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         raise ValueError("LLM response must be a dict with 'steps' list")
