@@ -478,6 +478,7 @@ class PipelineCLI:
                                 for r in rows
                                 if r.get("PurchaseCardId")
                             ]
+                            card_ids = list(dict.fromkeys(card_ids))
                         else:
                             console.print("SQL не вернул данных.")
                         console.print(
