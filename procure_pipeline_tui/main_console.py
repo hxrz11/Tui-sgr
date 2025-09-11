@@ -446,20 +446,26 @@ class PipelineCLI:
 
             has_api = any(step.get("type") == "api" for step in steps_list)
             if has_api and card_ids:
-                for card_id in card_ids:
+                total = len(card_ids)
+                print(
+                    f"Нужно обработать {total} записей закупок. Ниже прогресс."
+                )
+                start_time = time.time()
+                success_count = 0
+                for i, card_id in enumerate(card_ids, start=1):
                     write_log(
                         self.log_file, "status_api_request", {"card_id": card_id}
                     )
                     try:
                         data = run_with_spinner(
-                            f"Статусы для {card_id}", fetch_statuses, card_id
+                            f"[{i}/{total}] {card_id}", fetch_statuses, card_id
                         )
                         write_log(
                             self.log_file,
                             "status_api_response",
                             {"card_id": card_id, "response": data},
                         )
-                        print(json.dumps(data, ensure_ascii=False, indent=2))
+                        success_count += 1
                     except Exception as e:
                         write_log(
                             self.log_file,
@@ -471,6 +477,10 @@ class PipelineCLI:
                             },
                         )
                         print(f"Ошибка запроса статусов: {e}")
+                elapsed = time.time() - start_time
+                print(
+                    f"Заняло {elapsed:.2f} сек, {success_count} статусов получено успешно."
+                )
             elif has_api:
                 print("PurchaseCardId не найдены, API шаг пропущен.")
             return
