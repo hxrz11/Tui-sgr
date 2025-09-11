@@ -321,6 +321,50 @@ def fetch_statuses(card_id: str) -> dict:
     return resp.json()
 
 
+def call_ollama_synthesis(
+    question: str,
+    sql_rows: List[Dict[str, Any]],
+    statuses: List[Dict[str, Any]],
+    log_file: str,
+) -> str:
+    """Запрашивает у Ollama итоговый ответ и логирует запрос/ответ."""
+    parts = [
+        f"Вопрос: {question}",
+        "Результаты SQL:",
+        json.dumps(sql_rows, ensure_ascii=False),
+    ]
+    if statuses:
+        parts.append("Статусы:")
+        parts.append(json.dumps(statuses, ensure_ascii=False))
+    parts.append("Сформулируй итоговый ответ на основе данных.")
+    prompt = "\n".join(parts)
+
+    url = OLLAMA_URL.rstrip('/') + "/api/generate"
+    body = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "system": (
+            "Ты — аналитик по закупкам. Используй только предоставленные данные. "
+            "Ответ дай на русском языке."
+        ),
+        "stream": False,
+    }
+    write_log(log_file, "llm_synth_request", {"url": url, "body": body})
+
+    resp = requests.post(url, json=body, timeout=180)
+    status_code = resp.status_code
+    resp_text = resp.text
+    write_log(
+        log_file,
+        "llm_synth_response",
+        {"status_code": status_code, "text": resp_text},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = (data.get("response") or "").strip()
+    return text
+
+
 def render_plan(plan: dict) -> None:
     sep = "-" * 30
     console.print(sep)
@@ -405,6 +449,8 @@ class PipelineCLI:
             render_plan(plan)
 
             card_ids: List[str] = []
+            sql_rows: List[Dict[str, Any]] = []
+            status_results: List[Dict[str, Any]] = []
             steps_list = plan.get("steps", [])
             if steps_list:
                 first_step = steps_list[0]
@@ -418,6 +464,7 @@ class PipelineCLI:
                             "Выполняю SQL", execute_sql, sql_query, self.log_file
                         )
                         if rows:
+                            sql_rows = rows
                             table = Table(show_header=True, header_style="bold")
                             for col in rows[0].keys():
                                 table.add_column(col)
@@ -465,6 +512,7 @@ class PipelineCLI:
                             "status_api_response",
                             {"card_id": card_id, "response": data},
                         )
+                        status_results.append({"card_id": card_id, "response": data})
                         success_count += 1
                     except Exception as e:
                         write_log(
@@ -483,6 +531,29 @@ class PipelineCLI:
                 )
             elif has_api:
                 print("PurchaseCardId не найдены, API шаг пропущен.")
+
+            has_synthesis = any(step.get("type") == "synthesis" for step in steps_list)
+            if has_synthesis:
+                try:
+                    answer = run_with_spinner(
+                        "Формирую финальный ответ",
+                        call_ollama_synthesis,
+                        self.question,
+                        sql_rows,
+                        status_results,
+                        self.log_file,
+                    )
+                    console.print(answer)
+                    write_log(self.log_file, "final_answer", {"text": answer})
+                except Exception as e:
+                    write_log(
+                        self.log_file,
+                        "error",
+                        {"stage": "synthesis", "error": str(e)},
+                    )
+                    console.print(f"Ошибка шага синтеза: {e}")
+            else:
+                console.print("Шаг synthesis не найден, финальный ответ не сформирован.")
             return
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
