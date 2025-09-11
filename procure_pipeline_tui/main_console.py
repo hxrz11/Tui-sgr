@@ -12,7 +12,6 @@ import os
 import json
 import uuid
 import datetime as dt
-import textwrap
 from typing import Any, Optional, Tuple, List, Dict
 import sys
 import time
@@ -212,7 +211,7 @@ def render_plan(plan: dict) -> str:
         lines.append(step.get("description", ""))
         sql = step.get("sql")
         if sql:
-            lines.append(textwrap.dedent(sql).strip())
+            lines.append(sql.strip())
         lines.append(sep)
     return "\n".join(lines)
 
@@ -283,11 +282,8 @@ class PipelineCLI:
             write_log(self.log_file, "llm_meta", meta)
             print("План от llm получен!")
             print(render_plan(plan))
-            if meta:
-                print(f"Модель: {meta.get('model', 'n/a')}")
-            print(
-                "Пока следующий шаг не реализован. Переходим к доработке Шага 1 (SQL)."
-            )
+            print("Дальнейшие шаги в разработке. Стоп.")
+            return
         except Exception as e:
             write_log(self.log_file, "error", {"stage": "plan", "error": str(e)})
             print(f"Ошибка построения плана: {e}")
