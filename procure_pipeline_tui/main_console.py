@@ -365,6 +365,58 @@ def call_ollama_synthesis(
     return text
 
 
+def call_ollama_review(
+    question: str,
+    schema: dict | None,
+    sql_query: str | None,
+    answer: str,
+    api_responses: List[Dict[str, Any]],
+    log_file: str,
+) -> str:
+    """Отправляет модели все артефакты и возвращает финальный обзор.
+
+    Логирует запрос/ответ для трассировки.
+    """
+    parts = [
+        f"Вопрос: {question}",
+    ]
+    if schema is not None:
+        parts.append("План:")
+        parts.append(json.dumps(schema, ensure_ascii=False))
+    if sql_query:
+        parts.append("SQL:")
+        parts.append(sql_query)
+    if api_responses:
+        parts.append("API ответы:")
+        parts.append(json.dumps(api_responses, ensure_ascii=False))
+    parts.append("Финальный ответ:")
+    parts.append(answer)
+    parts.append("Сформулируй краткий обзор/summary." )
+    prompt = "\n".join(parts)
+
+    url = OLLAMA_URL.rstrip('/') + "/api/generate"
+    body = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "system": "Ты — аналитик по закупкам. Ответь кратким обзором на русском.",
+        "stream": False,
+    }
+    write_log(log_file, "llm_review_request", {"url": url, "body": body})
+
+    resp = requests.post(url, json=body, timeout=180)
+    status_code = resp.status_code
+    resp_text = resp.text
+    write_log(
+        log_file,
+        "llm_review_response",
+        {"status_code": status_code, "text": resp_text},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = (data.get("response") or "").strip()
+    return text
+
+
 def render_plan(plan: dict) -> None:
     sep = "-" * 30
     console.print(sep)
@@ -451,6 +503,7 @@ class PipelineCLI:
             card_ids: List[str] = []
             sql_rows: List[Dict[str, Any]] = []
             status_results: List[Dict[str, Any]] = []
+            sql_query: Optional[str] = None
             steps_list = plan.get("steps", [])
             if steps_list:
                 first_step = steps_list[0]
@@ -546,6 +599,19 @@ class PipelineCLI:
                     )
                     console.print(answer)
                     write_log(self.log_file, "final_answer", {"text": answer})
+
+                    review = run_with_spinner(
+                        "Финальный обзор",
+                        call_ollama_review,
+                        self.question,
+                        self.plan,
+                        sql_query,
+                        answer,
+                        status_results,
+                        self.log_file,
+                    )
+                    console.print(review)
+                    write_log(self.log_file, "final_review", {"text": review})
                 except Exception as e:
                     write_log(
                         self.log_file,
