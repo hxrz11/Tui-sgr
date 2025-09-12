@@ -441,7 +441,11 @@ def call_ollama_synthesis(
     if statuses:
         parts.append("Статусы:")
         parts.append(json.dumps(statuses, ensure_ascii=False))
-    parts.append("Сформулируй итоговый ответ на основе данных.")
+    parts.append(
+        "Сформируй итоговый ответ. Агрегируй по PurchaseCardId, покажи текущие статусы,"
+        " даты выводи в формате DD-MM-YYYY. Если в SQL есть LIMIT, явно укажи, что"
+        " показана срезка."
+    )
     prompt = "\n".join(parts)
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
@@ -449,8 +453,10 @@ def call_ollama_synthesis(
         "model": MODEL_NAME,
         "prompt": prompt,
         "system": (
-            "Ты — аналитик по закупкам. Используй только предоставленные данные. "
-            "Ответ дай на русском языке."
+            "Ты — аналитик по закупкам. Используй только предоставленные данные."
+            " Интерпретируй их с агрегацией по PurchaseCardId, отражай текущие статусы,"
+            " соблюдай формат дат DD-MM-YYYY и при наличии LIMIT упоминай, что это"
+            " срезка. Ответ дай на русском языке."
         ),
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
