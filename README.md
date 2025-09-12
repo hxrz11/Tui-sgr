@@ -35,6 +35,7 @@ pip install requests psycopg2-binary python-dotenv
 
 - `OLLAMA_URL` – URL сервера Ollama (по умолчанию `http://localhost:11434`)
 - `MODEL_NAME` – название модели LLM (по умолчанию `llama3.1:70b-instruct-q4_K_M`)
+- `OLLAMA_TIMEOUT` – таймаут ожидания ответа модели в секундах (по умолчанию `180`)
 - `POSTGRES_DSN` – строка подключения к Postgres
 - `LOG_DIR` – путь к каталогу для логов (по умолчанию `./logs`)
 - `STATUS_API_URL` – базовый URL сервиса статусов закупок (по умолчанию `http://localhost:8000`)
