@@ -85,7 +85,7 @@ def fetch_purchaseallview_schema() -> str:
 # Prompts
 # ------------------------------
 
-SYSTEM_PROMPT = (
+COMMON_CONTEXT = (
     "Ты — аналитик по закупкам. Отвечаешь ТОЛЬКО на основе: \n"
     '1) SELECT к public."PurchaseAllView"\n'
     '2) Истории статусов из внешнего API (вход: "PurchaseCardId", выход: таймлайн статусов по ИКЗ).\n'
@@ -103,8 +103,17 @@ SYSTEM_PROMPT = (
     '- "ArchiveStatus" учитывай только если явно попросят.\n'
     '- Статусы нужны, если в вопросе есть «статус/текущий статус/история/этап/таймлайн».\n'
     '- Каждый SQL-запрос должен содержать WHERE, ROW_NUMBER и LIMIT.\n'
-    '- План максимум из 3 шагов. Если требуются статусы — sql → api → synthesis, иначе sql → synthesis. Если есть шаг api, во внешнем SELECT добавь AND "PurchaseCardId" IS NOT NULL.\n\n'
-    "Формы ответов строго в JSON по запрошенной схеме. Без дополнительного текста.\n"
+)
+
+PLAN_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + '- План максимум из 3 шагов. Если требуются статусы — sql → api → synthesis, иначе sql → synthesis. Если есть шаг api, во внешнем SELECT добавь AND "PurchaseCardId" IS NOT NULL.\n\n'
+    + "Формы ответов строго в JSON по запрошенной схеме. Без дополнительного текста.\n"
+)
+
+FIX_SQL_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + "Твоя задача — исправить ошибочный SQL-запрос, соблюдая правила выше. Верни только исправленный SQL без пояснений.\n"
 )
 
 PLAN_USER_PROMPT_TEMPLATE = (
@@ -239,7 +248,7 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     body = {
         "model": MODEL_NAME,
         "prompt": user_prompt,
-        "system": SYSTEM_PROMPT,
+        "system": PLAN_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.1, "num_ctx": 8192},
@@ -315,30 +324,28 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
 
 
 def call_ollama_fix_sql(
-    question: str, schema: str, bad_sql: str, error: str, log_file: str
+    question: str,
+    schema: str,
+    bad_sql: str,
+    db_error_or_logic_error: str,
+    log_file: str,
+    intended_columns: Optional[List[str]] = None,
 ) -> str:
-    """Ask LLM to fix SQL based on schema and error message."""
-    parts = [
-        "Схема таблицы:",
-        schema,
-        f"Вопрос: {question}",
-        "Неудачный SQL:",
-        bad_sql,
-        f"Ошибка БД: {error}",
-        "Исправь запрос, соблюдая правила:",
-        '- только SELECT из public."PurchaseAllView";',
-        '- обязательный фильтр WHERE "PurchaseRecordStatus"=\'A\';',
-        '- дедупликация версий по "GlobalUid" через ROW_NUMBER() OVER (...) rn=1 (приоритет "PurchaseCardId" и даты "ProcessingDate"/"CompletedDate"/"ApprovalDate" DESC NULLS LAST);',
-        "- даты форматируй to_char(...,'DD-MM-YYYY');",
-        '- если LIMIT не указан — добавь LIMIT 100;',
-        "Верни только исправленный SQL.",
-    ]
-    prompt = "\n".join(parts)
+    """Ask LLM to fix SQL based on schema, intended columns and error message."""
+    payload: Dict[str, Any] = {
+        "schema_json": schema,
+        "question": question,
+        "bad_sql": bad_sql,
+        "db_error_or_logic_error": db_error_or_logic_error,
+    }
+    if intended_columns:
+        payload["intended_columns_json"] = intended_columns
+    prompt = json.dumps(payload, ensure_ascii=False)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
         "prompt": prompt,
-        "system": SYSTEM_PROMPT,
+        "system": FIX_SQL_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
