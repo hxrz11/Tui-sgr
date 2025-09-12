@@ -430,6 +430,58 @@ def call_ollama_plan(
     return plan, meta, previews
 
 
+SQL_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + "Жёсткие правила SQL:\n"
+    "- Разрешены только SELECT к public.\"PurchaseAllView\". Никаких CTE/DML/других таблиц.\n"
+    "- Имена таблиц/полей — в двойных кавычках.\n"
+    "- Без * — только явные поля.\n"
+    "- По умолчанию фильтр: WHERE \"PurchaseRecordStatus\"='A'. Другие статусы — только по явному запросу.\n"
+    "- Дедупликация \"версий\" по \"GlobalUid\": оставить ровно одну строку по приоритету:\n"
+    "  1) строка с непустым \"PurchaseCardId\";\n"
+    "  2) затем наиболее поздняя \"ProcessingDate\", затем \"CompletedDate\", затем \"ApprovalDate\" (DESC NULLS LAST).\n"
+    "  Использовать ROW_NUMBER() OVER (...) и фильтровать rn = 1.\n"
+    "- Поиск по тексту — только ILIKE с основой слова '%<stem>%'. Для номенклатуры искать по двум полям:\n"
+    "  (\"Nomenclature\" ILIKE '%<stem>%' OR \"NomenclatureFullName\" ILIKE '%<stem>%').\n"
+    "- Формат дат для пользователя — DD-MM-YYYY: to_char(...,'DD-MM-YYYY') AS \"<FieldFmt>\".\n"
+    "- Если LIMIT не задан — использовать LIMIT 100 и явно писать, что это срезка.\n"
+    "- \"ArchiveStatus\" учитывать только если пользователь явно запросил.\n"
+)
+
+
+def call_ollama_sql(
+    question: str, steps: List[Dict[str, Any]], log_file: str
+) -> str:
+    """Генерирует SQL на основе плана и вопроса."""
+    user_prompt = (
+        f"question:\n{question}\n\n"
+        f"plan_steps_json:\n{json.dumps(steps, ensure_ascii=False)}\n\n"
+        "Верни только SQL."
+    )
+    url = OLLAMA_URL.rstrip('/') + "/api/generate"
+    body = {
+        "model": MODEL_NAME,
+        "prompt": user_prompt,
+        "system": SQL_SYSTEM_PROMPT,
+        "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+    }
+    write_log(log_file, "llm_sql_request", {"url": url, "body": body})
+
+    resp = requests.post(url, json=body, timeout=OLLAMA_TIMEOUT)
+    status_code = resp.status_code
+    resp_text = resp.text
+    write_log(
+        log_file,
+        "llm_sql_response",
+        {"status_code": status_code, "text": resp_text},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = strip_sql_block(data.get("response"))
+    return text
+
+
 def call_ollama_fix_sql(
     question: str,
     schema: str,
@@ -713,18 +765,112 @@ class PipelineCLI:
             status_results: List[Dict[str, Any]] = []
             sql_query: Optional[str] = None
             steps_list = plan.get("steps", [])
-            if steps_list:
-                first_step = steps_list[0]
-            else:
-                first_step = {}
 
-            if first_step.get("type") == "sql":
-                sql_query = strip_sql_block(first_step.get("sql"))
-                if sql_query:
+            try:
+                sql_query = run_with_spinner(
+                    "Генерирую SQL",
+                    call_ollama_sql,
+                    self.question,
+                    steps_list,
+                    self.log_file,
+                )
+                write_log(
+                    self.log_file,
+                    "sql_generated",
+                    {"sql": sql_query, "steps": steps_list},
+                )
+            except Exception as e:
+                write_log(
+                    self.log_file,
+                    "error",
+                    {"stage": "sql_gen", "error": str(e)},
+                )
+                console.print(f"Ошибка генерации SQL: {e}")
+                return
+
+            intended_columns = []
+            if steps_list:
+                intended_columns = (
+                    steps_list[0].get("details", {}).get("projection_fields") or []
+                )
+
+            try:
+                rows, total_count = run_with_spinner(
+                    "Выполняю SQL", execute_sql, sql_query, self.log_file
+                )
+                if rows:
+                    sql_rows = rows
+                    table = Table(show_header=True, header_style="bold")
+                    for col in rows[0].keys():
+                        table.add_column(col)
+                    for row in rows:
+                        table.add_row(
+                            *[str(row.get(col, "")) for col in rows[0].keys()]
+                        )
+                    console.print(table)
+                    card_ids = [
+                        str(r.get("PurchaseCardId"))
+                        for r in rows
+                        if r.get("PurchaseCardId")
+                    ]
+                    card_ids = list(dict.fromkeys(card_ids))
+                else:
+                    console.print("SQL не вернул данных.")
+                console.print(
+                    f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
+                )
+            except Exception as e:
+                write_log(
+                    self.log_file,
+                    "error",
+                    {"stage": "sql_exec", "error": str(e)},
+                )
+                console.print(f"Ошибка выполнения SQL: {e}")
+                try:
+                    schema_text = run_with_spinner(
+                        "Получаю схему", fetch_purchaseallview_schema
+                    )
+                    write_log(
+                        self.log_file,
+                        "schema_description",
+                        {"text": schema_text},
+                    )
+                    fixed_sql = run_with_spinner(
+                        "Исправляю SQL",
+                        call_ollama_fix_sql,
+                        self.question,
+                        schema_text,
+                        sql_query,
+                        str(e),
+                        self.log_file,
+                        intended_columns=intended_columns,
+                    )
+                    write_log(
+                        self.log_file,
+                        "sql_fix",
+                        {
+                            "original_sql": sql_query,
+                            "fixed_sql": fixed_sql,
+                            "error": str(e),
+                        },
+                    )
                     try:
                         rows, total_count = run_with_spinner(
-                            "Выполняю SQL", execute_sql, sql_query, self.log_file
+                            "Повторное выполнение SQL",
+                            execute_sql,
+                            fixed_sql,
+                            self.log_file,
                         )
+                        write_log(
+                            self.log_file,
+                            "sql_retry",
+                            {
+                                "original_sql": sql_query,
+                                "fixed_sql": fixed_sql,
+                                "error": None,
+                            },
+                        )
+                        sql_query = fixed_sql
                         if rows:
                             sql_rows = rows
                             table = Table(show_header=True, header_style="bold")
@@ -732,7 +878,10 @@ class PipelineCLI:
                                 table.add_column(col)
                             for row in rows:
                                 table.add_row(
-                                    *[str(row.get(col, "")) for col in rows[0].keys()]
+                                    *[
+                                        str(row.get(col, ""))
+                                        for col in rows[0].keys()
+                                    ]
                                 )
                             console.print(table)
                             card_ids = [
@@ -746,96 +895,26 @@ class PipelineCLI:
                         console.print(
                             f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
                         )
-                    except Exception as e:
+                    except Exception as e2:
                         write_log(
                             self.log_file,
-                            "error",
-                            {"stage": "sql_exec", "error": str(e)},
+                            "sql_retry",
+                            {
+                                "original_sql": sql_query,
+                                "fixed_sql": fixed_sql,
+                                "error": str(e2),
+                            },
                         )
-                        console.print(f"Ошибка выполнения SQL: {e}")
-                        try:
-                            schema_text = run_with_spinner(
-                                "Получаю схему", fetch_purchaseallview_schema
-                            )
-                            write_log(
-                                self.log_file,
-                                "schema_description",
-                                {"text": schema_text},
-                            )
-                            fixed_sql = run_with_spinner(
-                                "Исправляю SQL",
-                                call_ollama_fix_sql,
-                                self.question,
-                                schema_text,
-                                sql_query,
-                                str(e),
-                                self.log_file,
-                            )
-                            try:
-                                rows, total_count = run_with_spinner(
-                                    "Повторное выполнение SQL",
-                                    execute_sql,
-                                    fixed_sql,
-                                    self.log_file,
-                                )
-                                write_log(
-                                    self.log_file,
-                                    "sql_retry",
-                                    {
-                                        "original_sql": sql_query,
-                                        "fixed_sql": fixed_sql,
-                                        "error": None,
-                                    },
-                                )
-                                sql_query = fixed_sql
-                                if rows:
-                                    sql_rows = rows
-                                    table = Table(
-                                        show_header=True, header_style="bold"
-                                    )
-                                    for col in rows[0].keys():
-                                        table.add_column(col)
-                                    for row in rows:
-                                        table.add_row(
-                                            *[
-                                                str(row.get(col, ""))
-                                                for col in rows[0].keys()
-                                            ]
-                                        )
-                                    console.print(table)
-                                    card_ids = [
-                                        str(r.get("PurchaseCardId"))
-                                        for r in rows
-                                        if r.get("PurchaseCardId")
-                                    ]
-                                    card_ids = list(dict.fromkeys(card_ids))
-                                else:
-                                    console.print("SQL не вернул данных.")
-                                console.print(
-                                    f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
-                                )
-                            except Exception as e2:
-                                write_log(
-                                    self.log_file,
-                                    "sql_retry",
-                                    {
-                                        "original_sql": sql_query,
-                                        "fixed_sql": fixed_sql,
-                                        "error": str(e2),
-                                    },
-                                )
-                                console.print(
-                                    f"Повторный SQL также завершился ошибкой: {e2}"
-                                )
-                        except Exception as fix_err:
-                            write_log(
-                                self.log_file,
-                                "error",
-                                {"stage": "sql_fix", "error": str(fix_err)},
-                            )
-                            console.print(
-                                f"Ошибка исправления SQL: {fix_err}"
-                            )
+                        console.print(
+                            f"Повторный SQL также завершился ошибкой: {e2}"
+                        )
+                except Exception as fix_err:
+                    write_log(
+                        self.log_file,
+                        "error",
+                        {"stage": "sql_fix", "error": str(fix_err)},
+                    )
+                    console.print(f"Ошибка исправления SQL: {fix_err}")
 
             has_api = any(step.get("type") == "api" for step in steps_list)
             if has_api and card_ids:
