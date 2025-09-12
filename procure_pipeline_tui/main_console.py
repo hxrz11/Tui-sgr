@@ -62,6 +62,34 @@ DB_SCHEMA: Dict[str, str] = {
 }
 
 
+COMMON_CONTEXT = (
+    "Ты — аналитик по закупкам. Отвечаешь только на основе:\n"
+    '1) SELECT к public."PurchaseAllView"\n'
+    '2) Истории статусов из внешнего API (вход: "PurchaseCardId", выход: таймлайн статусов по ИКЗ).\n'
+    "Никаких домыслов вне данных.\n\n"
+    "Разрешённые поля: GlobalUid, PurchaseCardId, PurchaseRecordStatus,"
+    " Nomenclature, NomenclatureFullName, OrderDate, ProcessingDate,"
+    " CompletedDate, ApprovalDate, ArchiveStatus.\n\n"
+    "Правила SQL:\n"
+    '- только SELECT из public."PurchaseAllView";\n'
+    '- двойные кавычки для имён;\n'
+    '- без SELECT *;\n'
+    '- по умолчанию WHERE "PurchaseRecordStatus"=\'A\';\n'
+    '- дедупликация по "GlobalUid" через ROW_NUMBER() OVER (...), приоритет '
+    'непустого "PurchaseCardId", затем "ProcessingDate" DESC NULLS LAST, '
+    '"CompletedDate" DESC NULLS LAST, "ApprovalDate" DESC NULLS LAST;\n'
+    '- поиск ILIKE \'%stem%\' (для номенклатуры по "Nomenclature" и '
+    '"NomenclatureFullName");\n'
+    '- даты to_char(...,\'DD-MM-YYYY\') AS "<FieldFmt>";\n'
+    '- если LIMIT не указан — ставь LIMIT 100 и укажи, что это срезка;\n'
+    '- "ArchiveStatus" учитывай только если явно попросят.\n\n'
+    "Работа со статусами:\n"
+    '- если в вопросе есть слова статус/текущий статус/история/этап/таймлайн, '
+    'после SQL получай уникальные непустые "PurchaseCardId" и вызывай '
+    'API по одному ID за запрос, текущий статус — последний по времени.\n'
+)
+
+
 def fetch_purchaseallview_schema() -> str:
     """Fetch column names and types for public."PurchaseAllView"."""
     query = (
@@ -86,40 +114,22 @@ def fetch_purchaseallview_schema() -> str:
 # ------------------------------
 
 SYSTEM_PROMPT = (
-    "Ты — аналитик по закупкам. Отвечаешь ТОЛЬКО на основе: \n"
-    '1) SELECT к public."PurchaseAllView"\n'
-    '2) Истории статусов из внешнего API (вход: "PurchaseCardId", выход: таймлайн статусов по ИКЗ).\n'
-    "Никаких домыслов вне данных.\n\n"
-    "Жёсткие правила:\n"
-    '- Разрешены только SELECT из public."PurchaseAllView". Никаких CTE/DML/других таблиц.\n'
-    '- Всегда используешь двойные кавычки для имён полей/таблицы.\n'
-    '- Не используешь SELECT * — только явные поля.\n'
-    '- По умолчанию добавляешь WHERE "PurchaseRecordStatus"=\'A\'.\n'
-    '- Дедупликация по "GlobalUid": приоритет строки с непустым "PurchaseCardId"; затем по дате: "ProcessingDate" DESC, "CompletedDate" DESC, "ApprovalDate" DESC (NULLS LAST). Используй ROW_NUMBER() OVER (...) и фильтруй rn=1.\n'
-    '- Поиск ILIKE только по «основе слова», шаблон всегда \'%<stem>%\'. Для номенклатуры: ("Nomenclature" ILIKE \'%<stem>%\' OR "NomenclatureFullName" ILIKE \'%<stem>%\').\n'
-    '- Даты для пользователя — формат DD-MM-YYYY (to_char(...,\'DD-MM-YYYY\') AS "<FieldFmt>").\n'
-    '- Цен нет — работаешь с количествами/счётчиками/датами.\n'
-    '- Если LIMIT не задан — ставь LIMIT 100 и явно указывай, что это срезка.\n'
-    '- "ArchiveStatus" учитывай только если явно попросят.\n'
-    '- Статусы нужны, если в вопросе есть «статус/текущий статус/история/этап/таймлайн».\n'
-    '- Каждый SQL-запрос должен содержать WHERE, ROW_NUMBER и LIMIT.\n'
-    '- План максимум из 3 шагов. Если требуются статусы — sql → api → synthesis, иначе sql → synthesis. Если есть шаг api, во внешнем SELECT добавь AND "PurchaseCardId" IS NOT NULL.\n\n'
-    "Формы ответов строго в JSON по запрошенной схеме. Без дополнительного текста.\n"
+    COMMON_CONTEXT
+    + "\nВсе ответы — строго в JSON по запрошенной схеме без дополнительного текста."
 )
 
 PLAN_USER_PROMPT_TEMPLATE = (
-    "ТВОЯ ЗАДАЧА: построить план решения запроса пользователя.\n"
-    "ВХОД:\n- user_question: <<<{{QUESTION}}>>>\n\n"
+    "Построй план решения запроса пользователя.\n"
+    "Вопрос: {question}\n"
+    "Схема public.\"PurchaseAllView\":\n{schema_json}\n\n"
     "ТРЕБОВАНИЯ К ПЛАНУ:\n"
     "- steps: массив до 3 объектов. Каждый объект имеет поля id, type (sql|api|synthesis), title, description, requires, outputs.\n"
-    "- Первый шаг обязателен и имеет type='sql'. Для шага 'sql':\n"
-    "  - поля: id, type, title, description, requires, outputs, sql.\n"
-    "  - outputs: [\"sql\", \"preview_columns\", \"purchase_card_ids?\", \"metrics?\"].\n"
-    "  - sql: полный SELECT к public.\"PurchaseAllView\" с WHERE \"PurchaseRecordStatus\"='A',\n"
-    "    дедупликацией через ROW_NUMBER() OVER (...) rn=1 (приоритет PurchaseCardId и дат),\n"
-    "    явными полями, ILIKE '%stem%', to_char(...,'DD-MM-YYYY'), ORDER BY и LIMIT.\n"
-    "    Если далее будет шаг api — во внешнем запросе добавь AND \"PurchaseCardId\" IS NOT NULL.\n"
-    "- Без статусов: 2 шага (sql → synthesis). Со статусами: 3 шага (sql → api → synthesis).\n\n"
+    "- первый шаг type='sql' и включает поле sql.\n"
+    "- SQL: полный SELECT к public.\"PurchaseAllView\" с WHERE \"PurchaseRecordStatus\"='A', \n"
+    "  дедупликацией через ROW_NUMBER() OVER (...) rn=1, явными полями, \n"
+    "  поиском ILIKE '%stem%', to_char дат, ORDER BY и LIMIT (если не задан, LIMIT 100 как срезка).\n"
+    "  Если далее будет шаг api — во внешнем запросе добавь AND \"PurchaseCardId\" IS NOT NULL.\n"
+    "- Без статусов: sql → synthesis. Со статусами: sql → api → synthesis.\n\n"
     "ВЫХОД: строго JSON.\n"
 )
 
@@ -232,9 +242,13 @@ def ollama_check(base_url: str, model: str) -> Tuple[bool, str, Optional[dict]]:
     except Exception as e:
         return False, str(e), None
 
-def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dict[str, str]]]:
+def call_ollama_plan(
+    question: str, schema_json: str, log_file: str
+) -> Tuple[dict, dict, List[Dict[str, str]]]:
     """Возвращает (plan_json, meta, steps_preview) и логирует запрос."""
-    user_prompt = PLAN_USER_PROMPT_TEMPLATE.replace("{{QUESTION}}", question)
+    user_prompt = PLAN_USER_PROMPT_TEMPLATE.format(
+        question=question, schema_json=schema_json
+    )
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
@@ -613,9 +627,10 @@ class PipelineCLI:
         write_log(self.log_file, "question", {"text": q})
         print(f"Вопрос: {q}")
 
+        schema_json = json.dumps(DB_SCHEMA, ensure_ascii=False)
         try:
             plan, meta, _previews = run_with_spinner(
-                "Запрашиваю у LLM план действий", call_ollama_plan, q, self.log_file
+                "Запрашиваю у LLM план действий", call_ollama_plan, q, schema_json, self.log_file
             )
             self.plan = plan
             self.llm_meta = meta
