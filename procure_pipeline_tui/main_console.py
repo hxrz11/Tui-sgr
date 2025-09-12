@@ -503,14 +503,21 @@ def call_ollama_review(
         parts.append(json.dumps(api_responses, ensure_ascii=False))
     parts.append("Финальный ответ:")
     parts.append(answer)
-    parts.append("Сформулируй краткий обзор/summary." )
+    parts.append(
+        "Сформулируй 1-2 предложения с фактологическим саммари. "
+        "Явно укажи ограничение LIMIT из SQL, если оно применялось."
+    )
     prompt = "\n".join(parts)
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
         "prompt": prompt,
-        "system": "Ты — аналитик по закупкам. Ответь кратким обзором на русском.",
+        "system": (
+            "Ты — аналитик по закупкам. Дай фактологическое саммари "
+            "на русском в 1-2 предложения. Укажи ограничение LIMIT, "
+            "если оно есть."
+        ),
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
