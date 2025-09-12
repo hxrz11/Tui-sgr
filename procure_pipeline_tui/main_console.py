@@ -13,6 +13,7 @@ import json
 import uuid
 import datetime as dt
 from typing import Any, Optional, Tuple, List, Dict
+from pathlib import Path
 import sys
 import time
 import threading
@@ -157,22 +158,11 @@ def fetch_purchaseallview_schema() -> str:
 # Prompts
 # ------------------------------
 
-PLAN_SYSTEM_PROMPT = (
-    COMMON_CONTEXT
-    + "Используй COMMON CONTEXT. Твоя задача — построить план решений для вопроса пользователя в строгих рамках правил.\n"
-    "Выход — ТОЛЬКО JSON без текста вокруг:\n"
-    "{\n  \"steps\": [\n    { \"id\": \"...\", \"type\": \"sql|api|synthesis\", \"title\": \"...\", \"description\": \"...\", \"requires\": [\"...\"], \"outputs\": [\"...\"], \"sql\": \"...\"? }\n  ]\n}\n"
-)
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
-PLAN_USER_PROMPT_TEMPLATE = (
-    "user_question: <<<{question}>>>\n"
-    "schema_json: {schema_json}\n\n"
-    "Сформируй JSON-план:\n"
-    "- Если статусы нужны: шаги sql → api → synthesis.\n"
-    "- Если нет: sql → synthesis.\n"
-    "- В sql-шаг включи ПОЛНЫЙ SELECT (с дедупликацией rn=1, форматами дат, фильтрами и проекцией полей из schema_json).\n"
-    "- Никакого текста вне JSON.\n"
-)
+PLAN_SYSTEM_PROMPT = (PROMPTS_DIR / "plan_system_prompt.txt").read_text(encoding="utf-8")
+PLAN_USER_PROMPT_TEMPLATE = (PROMPTS_DIR / "plan_user_prompt_template.txt").read_text(encoding="utf-8")
+
 
 FIX_SQL_SYSTEM_PROMPT = (
     COMMON_CONTEXT

@@ -1,0 +1,8 @@
+user_question: <<<{question}>>>
+schema_json: {schema_json}
+
+Сформируй план по схеме выше:
+- НЕ ПИШИ SQL и код.
+- Заполни словесные спецификации (projection_fields/filters/category_logic/dedup/ordering/date_format/limit/notes) строго с опорой на schema_json и смысл вопроса.
+- Если вопрос не про статусы — шаг API пометь как пропускаемый.
+- Убедись, что план начинается с шага "sql_spec" и что он достаточен для последующей генерации корректного SQL на следующем этапе.
