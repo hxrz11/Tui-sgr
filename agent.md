@@ -43,6 +43,7 @@ pip install requests psycopg2-binary python-dotenv
 ```bash
 export OLLAMA_URL="http://localhost:11434"
 export MODEL_NAME="llama3.1:70b-instruct-q4_K_M"
+export OLLAMA_KEEP_ALIVE="5m"
 export POSTGRES_DSN="postgresql://user:pass@localhost:5432/postgres"
 export LOG_DIR="./logs"
 ```
