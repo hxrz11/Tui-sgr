@@ -379,13 +379,16 @@ def execute_sql(
     try:
         conn = psycopg2.connect(POSTGRES_DSN)
         with conn.cursor() as cur:
-            cur.execute(stripped)
-            rows = cur.fetchmany(limit)
+            wrapped_query = (
+                f"SELECT *, COUNT(*) OVER() AS total FROM ({stripped}) t LIMIT {limit}"
+            )
+            cur.execute(wrapped_query)
+            rows = cur.fetchall()
             cols = [desc[0] for desc in cur.description]
             result = [dict(zip(cols, r)) for r in rows]
-
-            cur.execute(f"SELECT COUNT(*) FROM ({stripped}) t")
-            total_count = cur.fetchone()[0]
+            total_count = result[0]["total"] if result else 0
+            for row in result:
+                row.pop("total", None)
 
             write_log(
                 log_file,
