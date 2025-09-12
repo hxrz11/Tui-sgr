@@ -52,43 +52,87 @@ DB_SCHEMA: Dict[str, str] = {
     "GlobalUid": "uuid",
     "PurchaseCardId": "uuid",
     "PurchaseRecordStatus": "text",
+    "PurchaseNumber": "text",
+    "PurchaseCardDate": "timestamp",
+    "PurchaseCardUserFio": "text",
+    "OrderNumber": "text",
+    "OrderDate": "timestamp",
+    "ApprovalDate": "timestamp",
+    "ObjectName": "text",
     "Nomenclature": "text",
     "NomenclatureFullName": "text",
-    "OrderDate": "date",
+    "ArtNumber": "text",
+    "Quantity": "numeric",
+    "RemainingQuantity": "numeric",
+    "ProcessedQuantity": "numeric",
+    "UnitName": "text",
     "ProcessingDate": "timestamp",
     "CompletedDate": "timestamp",
-    "ApprovalDate": "timestamp",
+    "UserName": "text",
+    "Notes": "text",
     "ArchiveStatus": "text",
+    "Category": "text",
+    "NomenclatureGroup": "text",
+    "OKPD2Name": "text",
+    "OKPD2Code": "text",
 }
 
 
 COMMON_CONTEXT = (
-    "Ты — аналитик по закупкам. Отвечаешь только на основе:\n"
-    '1) SELECT к public."PurchaseAllView"\n'
-    '2) Истории статусов из внешнего API (вход: "PurchaseCardId", выход: таймлайн статусов по ИКЗ).\n'
-    "Никаких домыслов вне данных.\n\n"
-    "Разрешённые поля: GlobalUid, PurchaseCardId, PurchaseRecordStatus,"
-    " Nomenclature, NomenclatureFullName, OrderDate, ProcessingDate,"
-    " CompletedDate, ApprovalDate, ArchiveStatus.\n\n"
-    "Правила SQL:\n"
-    '- только SELECT из public."PurchaseAllView";\n'
-    '- двойные кавычки для имён;\n'
-    '- без SELECT *;\n'
-    '- по умолчанию WHERE "PurchaseRecordStatus"=\'A\';\n'
-    '- дедупликация по "GlobalUid" через ROW_NUMBER() OVER (...), приоритет '
-    'непустого "PurchaseCardId", затем "ProcessingDate" DESC NULLS LAST, '
-    '"CompletedDate" DESC NULLS LAST, "ApprovalDate" DESC NULLS LAST;\n'
-    '- поиск ILIKE \'%stem%\' (для номенклатуры по "Nomenclature" и '
-    '"NomenclatureFullName");\n'
-    '- даты to_char(...,\'DD-MM-YYYY\') AS "<FieldFmt>";\n'
-    '- если LIMIT не указан — ставь LIMIT 100 и укажи, что это срезка;\n'
-    '- "ArchiveStatus" учитывай только если явно попросят.\n\n'
-    "Работа со статусами:\n"
-    '- если в вопросе есть слова статус/текущий статус/история/этап/таймлайн, '
-    'после SQL получай уникальные непустые "PurchaseCardId" и вызывай '
-    'API по одному ID за запрос, текущий статус — последний по времени.\n'
+    "Ты — аналитик по закупкам. Отвечай и генерируй планы строго по данным.\n\n"
+    "Домен:\n"
+    '- public."PurchaseAllView" — это ЗАКАЗЫ по НОМЕНКЛАТУРАМ (операционная система). Несколько строк заказа могут относиться к одной ЗАКУПКЕ.\n'
+    '- "PurchaseCardId" (может быть NULL) — служебная связка для внешнего STATUS API (для получения статусов).\n'
+    '- "PurchaseNumber" (text) — Номер закупки (понятен пользователю). Для ссылок на закупку в текстах используй "PurchaseNumber", а не "PurchaseCardId".\n'
+    '- Цен нет — работаем с количествами, датами и статусами.\n\n'
+    "Поля, понятные пользователю (whitelist для проекций/ответов):\n"
+    '(таблица public."PurchaseAllView" / ЗАКАЗЫ)\n'
+    '- "OrderNumber" (text)                   — Номер заявки, напр. ЛГ000000524\n'
+    '- "OrderDate" (timestamp)                — Дата создания заявки\n'
+    '- "ApprovalDate" (timestamp)             — Дата утверждения заявки\n'
+    '- "ObjectName" (text)                    — Название объекта строительства\n'
+    '- "Nomenclature" (text)                  — Краткое название номенклатуры\n'
+    '- "NomenclatureFullName" (text)          — Полное название номенклатуры\n'
+    '- "ArtNumber" (text)                     — Артикул\n'
+    '- "Quantity" (numeric)                   — Количество заказанное\n'
+    '- "RemainingQuantity" (numeric)          — Остаток количества\n'
+    '- "ProcessedQuantity" (numeric)          — Обработанное количество\n'
+    '- "UnitName" (text)                      — Ед. изм. (шт, м, кг...)\n'
+    '- "ProcessingDate" (timestamp)           — Дата обработки\n'
+    '- "CompletedDate" (timestamp)            — Дата завершения\n'
+    '- "UserName" (text)                      — Логин пользователя\n'
+    '- "Notes" (text)                         — Примечания\n'
+    '- "ArchiveStatus" (text)                 — Статус архивации\n'
+    '(ЗАКУПКИ)\n'
+    '- "PurchaseRecordStatus" (text)          — Статус записи закупки (A=активный)\n'
+    '- "PurchaseNumber" (text)                — Номер закупки\n'
+    '- "PurchaseCardDate" (timestamp)         — Дата создания карточки закупки\n'
+    '- "PurchaseCardUserFio" (text)           — ФИО пользователя\n\n'
+    "SQL-ограничения (для всех шагов с SQL):\n"
+    '- Только SELECT из public."PurchaseAllView". Никаких джойнов/CTE/DML/других таблиц.\n'
+    '- Всегда двойные кавычки для имён. Запрещён SELECT * — проектируй ТОЛЬКО поля из whitelist ИЛИ реально существующие поля из переданной схемы.\n'
+    '- Обязателен фильтр активных записей: WHERE "PurchaseRecordStatus"=\'A\' (если явно не сказано иначе).\n'
+    '- Дедупликация по "GlobalUid" через ROW_NUMBER() OVER (...) AS rn, фильтруй rn=1. Приоритет выбора: NOT NULL "PurchaseCardId"; затем по времени: "ProcessingDate" DESC, "CompletedDate" DESC, "ApprovalDate" DESC (NULLS LAST).\n'
+    '- Формат дат для пользовательских представлений: to_char(...,\'DD-MM-YYYY\') AS "<FieldFmt>".\n'
+    '- Если LIMIT не задан — добавь LIMIT 100 и считаем это срезкой.\n\n'
+    "Поиск по номенклатуре (стемминг/категории):\n"
+    "- Используй русскую основу слова (стемминг). Шаблон поиска '%<stem>%'. Пример: «ленолеум» → основа 'линол'.\n"
+    "- Исключай ложные совпадения по смыслу: пример — при поиске «линолеум» НЕ включай позиции типа «клей для линолеума», «смывка для линолеума» и т.п. (добавь отрицательные условия по словам: 'клей', 'смывк', 'шпат', и т.д. — по ситуации).\n"
+    "- Обобщённые запросы (напр. «весь инструмент»/«все инструменты»):\n"
+    '  1) В приоритете фильтр по полям категорий (если есть в схеме): "Category", "NomenclatureGroup", "OKPD2Name", "OKPD2Code".\n'
+    "  2) Если таких полей нет, применяй набор стемов к \"Nomenclature\"/\"NomenclatureFullName\" (инструм, перфорат, шуруповер, дрел, отвертк, пила ...), исключая ложные совпадения (например, NOT ILIKE '%инструкц%').\n\n"
+    "Статусы и история:\n"
+    '- STATUS API вызывается только при необходимости статусов.\n'
+    '- «Текущий статус» закупки — ПОСЛЕДНЕЕ по времени событие из STATUS API по соответствующей карточке; укажи дату достижения.\n'
+    '- Историю статусов показывай ТОЛЬКО если пользователь прямо спросил про историю/этапы/таймлайн (и ограниченно, без списка на десятки записей).\n\n'
+    "Фокус на вопрос пользователя:\n"
+    '- Всегда сначала отвечай на конкретный вопрос, а затем (по желанию) добавляй 1 уровень контекстной детали, напрямую объясняющей ответ (но без «аналитики ради аналитики»).\n'
+    '- Не перегружай техническими полями — используй понятные пользователю поля из списка выше.\n'
+    '- Если результаты урезаны LIMIT — явно укажи, что это срезка.\n\n'
+    "Проверка полей:\n"
+    '- Опирайся на фактическую схему, переданную в промпте. НИКОГДА не используй поля, которых нет в схеме.\n'
+    '- Если требуется поле из whitelist, но его нет в схеме — просто не используй его (без выдумывания).\n'
 )
-
 
 def fetch_purchaseallview_schema() -> str:
     """Fetch column names and types for public."PurchaseAllView"."""
@@ -113,24 +157,92 @@ def fetch_purchaseallview_schema() -> str:
 # Prompts
 # ------------------------------
 
-SYSTEM_PROMPT = (
+PLAN_SYSTEM_PROMPT = (
     COMMON_CONTEXT
-    + "\nВсе ответы — строго в JSON по запрошенной схеме без дополнительного текста."
+    + "Используй COMMON CONTEXT. Твоя задача — построить план решений для вопроса пользователя в строгих рамках правил.\n"
+    "Выход — ТОЛЬКО JSON без текста вокруг:\n"
+    "{\n  \"steps\": [\n    { \"id\": \"...\", \"type\": \"sql|api|synthesis\", \"title\": \"...\", \"description\": \"...\", \"requires\": [\"...\"], \"outputs\": [\"...\"], \"sql\": \"...\"? }\n  ]\n}\n"
 )
 
 PLAN_USER_PROMPT_TEMPLATE = (
-    "Построй план решения запроса пользователя.\n"
-    "Вопрос: {question}\n"
-    "Схема public.\"PurchaseAllView\":\n{schema_json}\n\n"
-    "ТРЕБОВАНИЯ К ПЛАНУ:\n"
-    "- steps: массив до 3 объектов. Каждый объект имеет поля id, type (sql|api|synthesis), title, description, requires, outputs.\n"
-    "- первый шаг type='sql' и включает поле sql.\n"
-    "- SQL: полный SELECT к public.\"PurchaseAllView\" с WHERE \"PurchaseRecordStatus\"='A', \n"
-    "  дедупликацией через ROW_NUMBER() OVER (...) rn=1, явными полями, \n"
-    "  поиском ILIKE '%stem%', to_char дат, ORDER BY и LIMIT (если не задан, LIMIT 100 как срезка).\n"
-    "  Если далее будет шаг api — во внешнем запросе добавь AND \"PurchaseCardId\" IS NOT NULL.\n"
-    "- Без статусов: sql → synthesis. Со статусами: sql → api → synthesis.\n\n"
-    "ВЫХОД: строго JSON.\n"
+    "user_question: <<<{question}>>>\n"
+    "schema_json: {schema_json}\n\n"
+    "Сформируй JSON-план:\n"
+    "- Если статусы нужны: шаги sql → api → synthesis.\n"
+    "- Если нет: sql → synthesis.\n"
+    "- В sql-шаг включи ПОЛНЫЙ SELECT (с дедупликацией rn=1, форматами дат, фильтрами и проекцией полей из schema_json).\n"
+    "- Никакого текста вне JSON.\n"
+)
+
+FIX_SQL_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + "Используй COMMON CONTEXT. Ты исправляешь ТОЛЬКО SELECT к public.\"PurchaseAllView\".\n"
+      "Правила:\n"
+      "- Сохрани намеренную проекцию полей (если передан список intended_columns). Если каких-то полей нет в схеме — опусти только их, остальные сохрани.\n"
+      "- Не добавляй несуществующие поля. Проекция должна соответствовать реальной схеме.\n"
+      "- WHERE \"PurchaseRecordStatus\"='A' (если явно не требуется иное), дедупликация rn=1, форматы дат (to_char AS \"<FieldFmt>\"), стемминг/исключения по номенклатуре, LIMIT 100 если не указан.\n"
+      "Верни ТОЛЬКО исправленный SQL (без пояснений).\n"
+)
+
+FIX_SQL_USER_PROMPT_TEMPLATE = (
+    "schema_json:\n{schema_json}\n\n"
+    "intended_columns (если есть, чтобы сохранить состав полей):\n{intended_columns_json}\n\n"
+    "question:\n{question}\n\n"
+    "bad_sql:\n{bad_sql}\n\n"
+    "db_error_or_logic_error:\n{error}\n\n"
+    "Верни только исправленный SQL."
+)
+
+SYNTHESIS_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + "Используй COMMON CONTEXT. Отвечай строго по данным. Принципы:\n"
+      "- Сначала дай прямой ответ на вопрос пользователя.\n"
+      "- Затем добавь 1 уровень короткой поясняющей детали, напрямую связанной с ответом.\n"
+      "- Если речь о закупке — используйте \"PurchaseNumber\" для идентификации в тексте (НЕ \"PurchaseCardId\").\n"
+      "- Историю статусов показывай только если пользователь прямо спросил про историю/этапы/таймлайн (и ограниченно, без списка на десятки записей).\n"
+      "- Если \"PurchaseNumber\" отсутствует, не придумывай; сообщи факт отсутствия, статусы тогда неизвестны.\n"
+      "- Формат дат в тексте: DD-MM-YYYY. Если выборка урезана LIMIT — упомяни, что это срезка.\n"
+)
+
+SYNTHESIS_USER_PROMPT_TEMPLATE = (
+    "Вопрос пользователя:\n<<<{question}>>>\n\n"
+    "Справочно (не для показа пользователю):\n"
+    "schema_json: {schema_json}\n"
+    "sql_query: {sql_query}\n\n"
+    "Результаты SQL (после rn=1):\n{sql_rows_json}\n\n"
+    "Статусы из STATUS API (по карточкам; может быть пусто):\n{statuses_json}\n\n"
+    "limit_note (пусто, если нет): {limit_note}\n\n"
+    "СФОРМИРУЙ ОТВЕТ:\n"
+    "- Ответь по сути вопроса. Если спрашивали «сколько» — укажи количество и поясни, чего именно (строки заказов, уникальные закупки/номера).\n"
+    "- Если спрашивали про статус — укажи текущий статус(ы) по соответствующим \"PurchaseNumber\" и дату достижения.\n"
+    "- Если вопрос не про историю — не выводи длинные таймлайны.\n"
+    "- Добавь уместные детали первого уровня (напр., объект, ключевые даты, единицы измерения/количества).\n"
+    "- Если данных нет — скажи об этом. Если есть срезка LIMIT — напомни об этом.\n"
+    "- Не показывай SQL/схему/служебные поля.\n"
+)
+
+REVIEW_SYSTEM_PROMPT = (
+    COMMON_CONTEXT
+    + "Используй COMMON CONTEXT. Сформируй 1–2 предложения, которые:\n"
+      "- Резюмируют ОТВЕТ НА ВОПРОС пользователя (а не общую аналитику).\n"
+      "- При необходимости упоминают \"PurchaseNumber\" и текущий статус (если это релевантно вопросу).\n"
+      "- Не включают историю статусов, если её не спрашивали.\n"
+      "- Кратко отмечают срезку (LIMIT), если она была.\n"
+      "Без технических терминов и SQL.\n"
+)
+
+REVIEW_USER_PROMPT_TEMPLATE = (
+    "Вопрос пользователя:\n<<<{question}>>>\n\n"
+    "Финальный ответ (показанный пользователю):\n{final_answer_text}\n\n"
+    "Контекст (для ориентира, не цитировать):\n"
+    "plan_json: {plan_json}\n"
+    "sql_query: {sql_query}\n"
+    "api_responses_json: {api_responses_json}\n"
+    "limit_note: {limit_note}\n\n"
+    "СФОРМИРУЙ РЕЗЮМЕ:\n"
+    "- 1–2 предложения, по сути вопроса.\n"
+    "- Можно упомянуть ключевые числа/номера закупок/текущие статусы, если это помогает понять ответ.\n"
+    "- Без техдеталей и истории, если её не просили.\n"
 )
 
 # ------------------------------
@@ -253,7 +365,7 @@ def call_ollama_plan(
     body = {
         "model": MODEL_NAME,
         "prompt": user_prompt,
-        "system": SYSTEM_PROMPT,
+        "system": PLAN_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.1, "num_ctx": 8192},
@@ -329,30 +441,26 @@ def call_ollama_plan(
 
 
 def call_ollama_fix_sql(
-    question: str, schema: str, bad_sql: str, error: str, log_file: str
+    question: str,
+    schema: str,
+    bad_sql: str,
+    error: str,
+    log_file: str,
+    intended_columns: Optional[List[str]] = None,
 ) -> str:
     """Ask LLM to fix SQL based on schema and error message."""
-    parts = [
-        "Схема таблицы:",
-        schema,
-        f"Вопрос: {question}",
-        "Неудачный SQL:",
-        bad_sql,
-        f"Ошибка БД: {error}",
-        "Исправь запрос, соблюдая правила:",
-        '- только SELECT из public."PurchaseAllView";',
-        '- обязательный фильтр WHERE "PurchaseRecordStatus"=\'A\';',
-        '- дедупликация версий по "GlobalUid" через ROW_NUMBER() OVER (...) rn=1 (приоритет "PurchaseCardId" и даты "ProcessingDate"/"CompletedDate"/"ApprovalDate" DESC NULLS LAST);',
-        "- даты форматируй to_char(...,'DD-MM-YYYY');",
-        '- если LIMIT не указан — добавь LIMIT 100;',
-        "Верни только исправленный SQL.",
-    ]
-    prompt = "\n".join(parts)
+    user_prompt = FIX_SQL_USER_PROMPT_TEMPLATE.format(
+        schema_json=schema,
+        intended_columns_json=json.dumps(intended_columns or []),
+        question=question,
+        bad_sql=bad_sql,
+        error=error,
+    )
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
-        "prompt": prompt,
-        "system": SYSTEM_PROMPT,
+        "prompt": user_prompt,
+        "system": FIX_SQL_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
@@ -443,39 +551,24 @@ def call_ollama_synthesis(
     sql_query: str,
     sql_rows: List[Dict[str, Any]],
     statuses: List[Dict[str, Any]],
+    limit_note: str,
     log_file: str,
 ) -> str:
     """Запрашивает у Ollama итоговый ответ и логирует запрос/ответ."""
-    parts = [
-        f"Вопрос: {question}",
-        "Схема таблицы:",
-        json.dumps(schema, ensure_ascii=False),
-    ]
-    if sql_query:
-        parts.append("SQL запрос:")
-        parts.append(sql_query)
-    parts.append("Результаты SQL:")
-    parts.append(json.dumps(sql_rows, ensure_ascii=False))
-    if statuses:
-        parts.append("Статусы:")
-        parts.append(json.dumps(statuses, ensure_ascii=False))
-    parts.append(
-        "Сформируй итоговый ответ. Агрегируй по PurchaseCardId, покажи текущие статусы,"
-        " даты выводи в формате DD-MM-YYYY. Если в SQL есть LIMIT, явно укажи, что"
-        " показана срезка."
+    user_prompt = SYNTHESIS_USER_PROMPT_TEMPLATE.format(
+        question=question,
+        schema_json=json.dumps(schema, ensure_ascii=False),
+        sql_query=sql_query,
+        sql_rows_json=json.dumps(sql_rows, ensure_ascii=False),
+        statuses_json=json.dumps(statuses, ensure_ascii=False),
+        limit_note=limit_note,
     )
-    prompt = "\n".join(parts)
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
-        "prompt": prompt,
-        "system": (
-            "Ты — аналитик по закупкам. Используй только предоставленные данные."
-            " Интерпретируй их с агрегацией по PurchaseCardId, отражай текущие статусы,"
-            " соблюдай формат дат DD-MM-YYYY и при наличии LIMIT упоминай, что это"
-            " срезка. Ответ дай на русском языке."
-        ),
+        "prompt": user_prompt,
+        "system": SYNTHESIS_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
@@ -497,45 +590,31 @@ def call_ollama_synthesis(
 
 def call_ollama_review(
     question: str,
-    schema: dict | None,
+    plan_json: dict | None,
     sql_query: str | None,
     answer: str,
     api_responses: List[Dict[str, Any]],
+    limit_note: str,
     log_file: str,
 ) -> str:
     """Отправляет модели все артефакты и возвращает финальный обзор.
 
     Логирует запрос и ответ для трассировки.
     """
-    parts = [
-        f"Вопрос: {question}",
-    ]
-    if schema is not None:
-        parts.append("План:")
-        parts.append(json.dumps(schema, ensure_ascii=False))
-    if sql_query:
-        parts.append("SQL:")
-        parts.append(sql_query)
-    if api_responses:
-        parts.append("API ответы:")
-        parts.append(json.dumps(api_responses, ensure_ascii=False))
-    parts.append("Финальный ответ:")
-    parts.append(answer)
-    parts.append(
-        "Сформулируй 1-2 предложения с фактологическим саммари. "
-        "Явно укажи ограничение LIMIT из SQL, если оно применялось."
+    user_prompt = REVIEW_USER_PROMPT_TEMPLATE.format(
+        question=question,
+        final_answer_text=answer,
+        plan_json=json.dumps(plan_json, ensure_ascii=False) if plan_json is not None else "null",
+        sql_query=sql_query or "",
+        api_responses_json=json.dumps(api_responses, ensure_ascii=False),
+        limit_note=limit_note,
     )
-    prompt = "\n".join(parts)
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
-        "prompt": prompt,
-        "system": (
-            "Ты — аналитик по закупкам. Дай фактологическое саммари "
-            "на русском в 1-2 предложения. Укажи ограничение LIMIT, "
-            "если оно есть."
-        ),
+        "prompt": user_prompt,
+        "system": REVIEW_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
@@ -820,6 +899,7 @@ class PipelineCLI:
                         sql_query,
                         sql_rows,
                         status_results,
+                        "",
                         self.log_file,
                     )
                     console.print(answer)
@@ -833,6 +913,7 @@ class PipelineCLI:
                         sql_query,
                         answer,
                         status_results,
+                        "",
                         self.log_file,
                     )
                     console.print(review)
