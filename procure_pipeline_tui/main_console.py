@@ -100,7 +100,9 @@ SYSTEM_PROMPT = (
     '- Цен нет — работаешь с количествами/счётчиками/датами.\n'
     '- Если LIMIT не задан — ставь LIMIT 100 и явно указывай, что это срезка.\n'
     '- "ArchiveStatus" учитывай только если явно попросят.\n'
-    '- Статусы нужны, если в вопросе есть «статус/текущий статус/история/этап/таймлайн».\n\n'
+    '- Статусы нужны, если в вопросе есть «статус/текущий статус/история/этап/таймлайн».\n'
+    '- Каждый SQL-запрос должен содержать WHERE, ROW_NUMBER и LIMIT.\n'
+    '- План максимум из 3 шагов. Если требуются статусы — sql → api → synthesis, иначе sql → synthesis. Если есть шаг api, во внешнем SELECT добавь AND "PurchaseCardId" IS NOT NULL.\n\n'
     "Формы ответов строго в JSON по запрошенной схеме. Без дополнительного текста.\n"
 )
 
@@ -108,12 +110,16 @@ PLAN_USER_PROMPT_TEMPLATE = (
     "ТВОЯ ЗАДАЧА: построить план решения запроса пользователя.\n"
     "ВХОД:\n- user_question: <<<{{QUESTION}}>>>\n\n"
     "ТРЕБОВАНИЯ К ПЛАНУ:\n"
-    "- steps: массив объектов с полями: id, type (sql|api|synthesis), title, description, requires, outputs.\n"
-    '- Если первый шаг type=\'sql\' — включи в объект поле \'sql\' со ПОЛНЫМ SELECT к public."PurchaseAllView"\n'
-    '  с дедупликацией rn=1, фильтром "PurchaseRecordStatus"=\'A\', явными полями, ILIKE \'%stem%\', to_char дат, ORDER BY, LIMIT.\n'
-    '  Если далее будет api — во внешнем запросе добавь AND "PurchaseCardId" IS NOT NULL.\n'
-    "- Если статусы не нужны — 2 шага: sql → synthesis. Если нужны — 3 шага: sql → api → synthesis.\n\n"
-    "ВЫХОД (строго JSON).\n"
+    "- steps: массив до 3 объектов. Каждый объект имеет поля id, type (sql|api|synthesis), title, description, requires, outputs.\n"
+    "- Первый шаг обязателен и имеет type='sql'. Для шага 'sql':\n"
+    "  - поля: id, type, title, description, requires, outputs, sql.\n"
+    "  - outputs: [\"sql\", \"preview_columns\", \"purchase_card_ids?\", \"metrics?\"].\n"
+    "  - sql: полный SELECT к public.\"PurchaseAllView\" с WHERE \"PurchaseRecordStatus\"='A',\n"
+    "    дедупликацией через ROW_NUMBER() OVER (...) rn=1 (приоритет PurchaseCardId и дат),\n"
+    "    явными полями, ILIKE '%stem%', to_char(...,'DD-MM-YYYY'), ORDER BY и LIMIT.\n"
+    "    Если далее будет шаг api — во внешнем запросе добавь AND \"PurchaseCardId\" IS NOT NULL.\n"
+    "- Без статусов: 2 шага (sql → synthesis). Со статусами: 3 шага (sql → api → synthesis).\n\n"
+    "ВЫХОД: строго JSON.\n"
 )
 
 # ------------------------------
