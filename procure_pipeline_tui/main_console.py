@@ -438,11 +438,11 @@ def call_ollama_synthesis(
     """Запрашивает у Ollama итоговый ответ и логирует запрос/ответ."""
     user_prompt = (
         f"question:\n{question}\n\n"
-        f"schema_json:\n```json\n{json.dumps(schema, ensure_ascii=False)}\n```\n\n"
+        f"schema_json:\n```json\n{json.dumps(schema, ensure_ascii=False, default=str)}\n```\n\n"
         f"sql_query:\n```sql\n{sql_query}\n```\n\n"
-        f"sql_rows_json:\n```json\n{json.dumps(sql_rows, ensure_ascii=False)}\n```\n\n"
-        f"statuses_json:\n```json\n{json.dumps(statuses, ensure_ascii=False)}\n```\n\n"
-        f"limit_note:\n{limit_note}\n"
+        f"sql_rows_json:\n```json\n{json.dumps(sql_rows, ensure_ascii=False, default=str)}\n```\n\n"
+        f"statuses_json:\n```json\n{json.dumps(statuses, ensure_ascii=False, default=str)}\n```\n\n"
+        f"limit_note:\n```text\n{limit_note}\n```\n"
     )
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
