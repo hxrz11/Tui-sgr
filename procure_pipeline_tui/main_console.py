@@ -45,6 +45,20 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 console = Console()
 
+# Описание структуры public."PurchaseAllView"
+DB_SCHEMA: Dict[str, str] = {
+    "GlobalUid": "uuid",
+    "PurchaseCardId": "uuid",
+    "PurchaseRecordStatus": "text",
+    "Nomenclature": "text",
+    "NomenclatureFullName": "text",
+    "OrderDate": "date",
+    "ProcessingDate": "timestamp",
+    "CompletedDate": "timestamp",
+    "ApprovalDate": "timestamp",
+    "ArchiveStatus": "text",
+}
+
 # ------------------------------
 # Prompts
 # ------------------------------
@@ -323,6 +337,8 @@ def fetch_statuses(card_id: str) -> dict:
 
 def call_ollama_synthesis(
     question: str,
+    schema: Dict[str, str],
+    sql_query: str,
     sql_rows: List[Dict[str, Any]],
     statuses: List[Dict[str, Any]],
     log_file: str,
@@ -330,9 +346,14 @@ def call_ollama_synthesis(
     """Запрашивает у Ollama итоговый ответ и логирует запрос/ответ."""
     parts = [
         f"Вопрос: {question}",
-        "Результаты SQL:",
-        json.dumps(sql_rows, ensure_ascii=False),
+        "Схема таблицы:",
+        json.dumps(schema, ensure_ascii=False),
     ]
+    if sql_query:
+        parts.append("SQL запрос:")
+        parts.append(sql_query)
+    parts.append("Результаты SQL:")
+    parts.append(json.dumps(sql_rows, ensure_ascii=False))
     if statuses:
         parts.append("Статусы:")
         parts.append(json.dumps(statuses, ensure_ascii=False))
@@ -456,6 +477,7 @@ class PipelineCLI:
                 first_step = steps_list[0]
             else:
                 first_step = {}
+            sql_query: str = ""
             if first_step.get("type") == "sql":
                 sql_query = first_step.get("sql")
                 if sql_query:
@@ -540,6 +562,8 @@ class PipelineCLI:
                         "Формирую финальный ответ",
                         call_ollama_synthesis,
                         self.question,
+                        DB_SCHEMA,
+                        sql_query,
                         sql_rows,
                         status_results,
                         self.log_file,
