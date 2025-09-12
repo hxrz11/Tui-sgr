@@ -38,6 +38,7 @@ load_dotenv()
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama3.1:70b-instruct-q4_K_M")
 OLLAMA_KEEP_ALIVE = "5m"
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://user:pass@localhost:5432/postgres")
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 STATUS_API_URL = os.getenv("STATUS_API_URL", "http://localhost:8000")
@@ -252,7 +253,7 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
     }
     write_log(log_file, "llm_request", {"url": url, "body": body})
 
-    resp = requests.post(url, json=body, timeout=180)
+    resp = requests.post(url, json=body, timeout=OLLAMA_TIMEOUT)
     status_code = resp.status_code
     resp_text = resp.text
     write_log(
@@ -343,7 +344,7 @@ def call_ollama_fix_sql(
     }
     write_log(log_file, "llm_fix_request", {"url": url, "body": body})
 
-    resp = requests.post(url, json=body, timeout=180)
+    resp = requests.post(url, json=body, timeout=OLLAMA_TIMEOUT)
     status_code = resp.status_code
     resp_text = resp.text
     write_log(
@@ -466,7 +467,7 @@ def call_ollama_synthesis(
     }
     write_log(log_file, "llm_synth_request", {"url": url, "body": body})
 
-    resp = requests.post(url, json=body, timeout=180)
+    resp = requests.post(url, json=body, timeout=OLLAMA_TIMEOUT)
     status_code = resp.status_code
     resp_text = resp.text
     write_log(
@@ -526,7 +527,7 @@ def call_ollama_review(
     }
     write_log(log_file, "llm_review_request", {"url": url, "body": body})
 
-    resp = requests.post(url, json=body, timeout=180)
+    resp = requests.post(url, json=body, timeout=OLLAMA_TIMEOUT)
     status_code = resp.status_code
     resp_text = resp.text
     write_log(
