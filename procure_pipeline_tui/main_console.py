@@ -178,6 +178,17 @@ def run_with_spinner(label: str, func, *args, **kwargs):
     return result
 
 
+def strip_sql_block(text: Optional[str]) -> str:
+    """Удаляет обрамление ```sql``` из ответа LLM, если оно присутствует."""
+    if not text:
+        return ""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:sql)?\s*\n", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n```$", "", text)
+    return text.strip()
+
+
 def db_check(dsn: str, log_file: str) -> Tuple[bool, str]:
     query = "SELECT 1"
     try:
@@ -313,6 +324,12 @@ def call_ollama_fix_sql(
         "Неудачный SQL:",
         bad_sql,
         f"Ошибка БД: {error}",
+        "Исправь запрос, соблюдая правила:",
+        '- только SELECT из public."PurchaseAllView";',
+        '- обязательный фильтр WHERE "PurchaseRecordStatus"=\'A\';',
+        '- дедупликация версий по "GlobalUid" через ROW_NUMBER() OVER (...) rn=1 (приоритет "PurchaseCardId" и даты "ProcessingDate"/"CompletedDate"/"ApprovalDate" DESC NULLS LAST);',
+        "- даты форматируй to_char(...,'DD-MM-YYYY');",
+        '- если LIMIT не указан — добавь LIMIT 100;',
         "Верни только исправленный SQL.",
     ]
     prompt = "\n".join(parts)
@@ -336,10 +353,7 @@ def call_ollama_fix_sql(
     )
     resp.raise_for_status()
     data = resp.json()
-    text = (data.get("response") or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`\n ")
-        text = text.replace("sql\n", "")
+    text = strip_sql_block(data.get("response"))
     return text
 
 
@@ -347,6 +361,7 @@ def execute_sql(
     query: str, log_file: str, limit: int = 10
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Выполняет безопасный SELECT к Postgres и логирует результат."""
+    query = strip_sql_block(query)
     stripped = query.strip().strip(";")
     if not stripped.upper().startswith("SELECT"):
         raise ValueError("Запрос должен начинаться с SELECT")
@@ -603,7 +618,7 @@ class PipelineCLI:
                 first_step = {}
             sql_query: str = ""
             if first_step.get("type") == "sql":
-                sql_query = first_step.get("sql")
+                sql_query = strip_sql_block(first_step.get("sql"))
                 if sql_query:
                     try:
                         rows, total_count = run_with_spinner(
