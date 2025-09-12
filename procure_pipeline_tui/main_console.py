@@ -332,15 +332,15 @@ def call_ollama_fix_sql(
     intended_columns: Optional[List[str]] = None,
 ) -> str:
     """Ask LLM to fix SQL based on schema, intended columns and error message."""
-    payload: Dict[str, Any] = {
+    prompt_payload: Dict[str, Any] = {
         "schema_json": schema,
         "question": question,
         "bad_sql": bad_sql,
         "db_error_or_logic_error": db_error_or_logic_error,
     }
     if intended_columns:
-        payload["intended_columns_json"] = intended_columns
-    prompt = json.dumps(payload, ensure_ascii=False)
+        prompt_payload["intended_columns_json"] = intended_columns
+    prompt = json.dumps(prompt_payload, ensure_ascii=False, indent=2)
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
