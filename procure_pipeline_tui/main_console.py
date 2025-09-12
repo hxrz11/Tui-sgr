@@ -59,6 +59,26 @@ DB_SCHEMA: Dict[str, str] = {
     "ArchiveStatus": "text",
 }
 
+
+def fetch_purchaseallview_schema() -> str:
+    """Fetch column names and types for public."PurchaseAllView"."""
+    query = (
+        "SELECT column_name, data_type "
+        "FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = 'PurchaseAllView' "
+        "ORDER BY ordinal_position"
+    )
+    conn = None
+    try:
+        conn = psycopg2.connect(POSTGRES_DSN)
+        with conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+            return "\n".join(f"{name} {dtype}" for name, dtype in rows)
+    finally:
+        if conn:
+            conn.close()
+
 # ------------------------------
 # Prompts
 # ------------------------------
@@ -272,6 +292,46 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
         "response_chars": len(raw),
     }
     return plan, meta, previews
+
+
+def call_ollama_fix_sql(
+    question: str, schema: str, bad_sql: str, error: str, log_file: str
+) -> str:
+    """Ask LLM to fix SQL based on schema and error message."""
+    parts = [
+        "Схема таблицы:",
+        schema,
+        f"Вопрос: {question}",
+        "Неудачный SQL:",
+        bad_sql,
+        f"Ошибка БД: {error}",
+        "Верни только исправленный SQL.",
+    ]
+    prompt = "\n".join(parts)
+    url = OLLAMA_URL.rstrip('/') + "/api/generate"
+    body = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "system": SYSTEM_PROMPT,
+        "stream": False,
+    }
+    write_log(log_file, "llm_fix_request", {"url": url, "body": body})
+
+    resp = requests.post(url, json=body, timeout=180)
+    status_code = resp.status_code
+    resp_text = resp.text
+    write_log(
+        log_file,
+        "llm_fix_response",
+        {"status_code": status_code, "text": resp_text},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = (data.get("response") or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`\n ")
+        text = text.replace("sql\n", "")
+    return text
 
 
 def execute_sql(
@@ -566,6 +626,89 @@ class PipelineCLI:
                             {"stage": "sql_exec", "error": str(e)},
                         )
                         console.print(f"Ошибка выполнения SQL: {e}")
+                        try:
+                            schema_text = run_with_spinner(
+                                "Получаю схему", fetch_purchaseallview_schema
+                            )
+                            write_log(
+                                self.log_file,
+                                "schema_description",
+                                {"text": schema_text},
+                            )
+                            fixed_sql = run_with_spinner(
+                                "Исправляю SQL",
+                                call_ollama_fix_sql,
+                                self.question,
+                                schema_text,
+                                sql_query,
+                                str(e),
+                                self.log_file,
+                            )
+                            try:
+                                rows, total_count = run_with_spinner(
+                                    "Повторное выполнение SQL",
+                                    execute_sql,
+                                    fixed_sql,
+                                    self.log_file,
+                                )
+                                write_log(
+                                    self.log_file,
+                                    "sql_retry",
+                                    {
+                                        "original_sql": sql_query,
+                                        "fixed_sql": fixed_sql,
+                                        "error": None,
+                                    },
+                                )
+                                sql_query = fixed_sql
+                                if rows:
+                                    sql_rows = rows
+                                    table = Table(
+                                        show_header=True, header_style="bold"
+                                    )
+                                    for col in rows[0].keys():
+                                        table.add_column(col)
+                                    for row in rows:
+                                        table.add_row(
+                                            *[
+                                                str(row.get(col, ""))
+                                                for col in rows[0].keys()
+                                            ]
+                                        )
+                                    console.print(table)
+                                    card_ids = [
+                                        str(r.get("PurchaseCardId"))
+                                        for r in rows
+                                        if r.get("PurchaseCardId")
+                                    ]
+                                    card_ids = list(dict.fromkeys(card_ids))
+                                else:
+                                    console.print("SQL не вернул данных.")
+                                console.print(
+                                    f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
+                                )
+                            except Exception as e2:
+                                write_log(
+                                    self.log_file,
+                                    "sql_retry",
+                                    {
+                                        "original_sql": sql_query,
+                                        "fixed_sql": fixed_sql,
+                                        "error": str(e2),
+                                    },
+                                )
+                                console.print(
+                                    f"Повторный SQL также завершился ошибкой: {e2}"
+                                )
+                        except Exception as fix_err:
+                            write_log(
+                                self.log_file,
+                                "error",
+                                {"stage": "sql_fix", "error": str(fix_err)},
+                            )
+                            console.print(
+                                f"Ошибка исправления SQL: {fix_err}"
+                            )
 
             has_api = any(step.get("type") == "api" for step in steps_list)
             if has_api and card_ids:
