@@ -85,7 +85,7 @@ def fetch_purchaseallview_schema() -> str:
 # Prompts
 # ------------------------------
 
-SYSTEM_PROMPT = (
+COMMON_CONTEXT = (
     "Ты — аналитик по закупкам. Отвечаешь ТОЛЬКО на основе: \n"
     '1) SELECT к public."PurchaseAllView"\n'
     '2) Истории статусов из внешнего API (вход: "PurchaseCardId", выход: таймлайн статусов по ИКЗ).\n'
@@ -106,6 +106,9 @@ SYSTEM_PROMPT = (
     '- План максимум из 3 шагов. Если требуются статусы — sql → api → synthesis, иначе sql → synthesis. Если есть шаг api, во внешнем SELECT добавь AND "PurchaseCardId" IS NOT NULL.\n\n'
     "Формы ответов строго в JSON по запрошенной схеме. Без дополнительного текста.\n"
 )
+SYSTEM_PROMPT = COMMON_CONTEXT
+
+SYNTHESIS_SYSTEM_PROMPT = COMMON_CONTEXT + ("Давай ответ одним уровнем объяснения без вложенных списков. Текущий статус для каждого PurchaseCardId — последняя запись в statuses_json. Если statuses_json пуст, явно сообщи, что статусы недоступны.")
 
 PLAN_USER_PROMPT_TEMPLATE = (
     "ТВОЯ ЗАДАЧА: построить план решения запроса пользователя.\n"
@@ -429,39 +432,24 @@ def call_ollama_synthesis(
     sql_query: str,
     sql_rows: List[Dict[str, Any]],
     statuses: List[Dict[str, Any]],
+    limit_note: str,
     log_file: str,
 ) -> str:
     """Запрашивает у Ollama итоговый ответ и логирует запрос/ответ."""
-    parts = [
-        f"Вопрос: {question}",
-        "Схема таблицы:",
-        json.dumps(schema, ensure_ascii=False),
-    ]
-    if sql_query:
-        parts.append("SQL запрос:")
-        parts.append(sql_query)
-    parts.append("Результаты SQL:")
-    parts.append(json.dumps(sql_rows, ensure_ascii=False))
-    if statuses:
-        parts.append("Статусы:")
-        parts.append(json.dumps(statuses, ensure_ascii=False))
-    parts.append(
-        "Сформируй итоговый ответ. Агрегируй по PurchaseCardId, покажи текущие статусы,"
-        " даты выводи в формате DD-MM-YYYY. Если в SQL есть LIMIT, явно укажи, что"
-        " показана срезка."
+    user_prompt = (
+        f"question:\n{question}\n\n"
+        f"schema_json:\n```json\n{json.dumps(schema, ensure_ascii=False)}\n```\n\n"
+        f"sql_query:\n```sql\n{sql_query}\n```\n\n"
+        f"sql_rows_json:\n```json\n{json.dumps(sql_rows, ensure_ascii=False)}\n```\n\n"
+        f"statuses_json:\n```json\n{json.dumps(statuses, ensure_ascii=False)}\n```\n\n"
+        f"limit_note:\n{limit_note}\n"
     )
-    prompt = "\n".join(parts)
 
     url = OLLAMA_URL.rstrip('/') + "/api/generate"
     body = {
         "model": MODEL_NAME,
-        "prompt": prompt,
-        "system": (
-            "Ты — аналитик по закупкам. Используй только предоставленные данные."
-            " Интерпретируй их с агрегацией по PurchaseCardId, отражай текущие статусы,"
-            " соблюдай формат дат DD-MM-YYYY и при наличии LIMIT упоминай, что это"
-            " срезка. Ответ дай на русском языке."
-        ),
+        "prompt": user_prompt,
+        "system": SYNTHESIS_SYSTEM_PROMPT,
         "stream": False,
         "keep_alive": OLLAMA_KEEP_ALIVE,
     }
@@ -627,6 +615,7 @@ class PipelineCLI:
             card_ids: List[str] = []
             sql_rows: List[Dict[str, Any]] = []
             status_results: List[Dict[str, Any]] = []
+            limit_note: str = ""
             sql_query: Optional[str] = None
             steps_list = plan.get("steps", [])
             if steps_list:
@@ -661,6 +650,11 @@ class PipelineCLI:
                             console.print("SQL не вернул данных.")
                         console.print(
                             f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
+                        )
+                        limit_note = (
+                            f"Показаны первые {len(rows)} строк из {total_count}"
+                            if total_count > len(rows)
+                            else f"Показаны все {total_count} строк"
                         )
                     except Exception as e:
                         write_log(
@@ -729,6 +723,11 @@ class PipelineCLI:
                                     console.print("SQL не вернул данных.")
                                 console.print(
                                     f"Всего в ответе {total_count} строк, выше первые {len(rows)}."
+                                )
+                                limit_note = (
+                                    f"Показаны первые {len(rows)} строк из {total_count}"
+                                    if total_count > len(rows)
+                                    else f"Показаны все {total_count} строк"
                                 )
                             except Exception as e2:
                                 write_log(
@@ -800,13 +799,14 @@ class PipelineCLI:
                     answer = run_with_spinner(
                         "Формирую финальный ответ",
                         call_ollama_synthesis,
-                        self.question,
-                        DB_SCHEMA,
-                        sql_query,
-                        sql_rows,
-                        status_results,
-                        self.log_file,
-                    )
+                          self.question,
+                          DB_SCHEMA,
+                          sql_query or "",
+                          sql_rows,
+                          status_results,
+                          limit_note,
+                          self.log_file,
+                      )
                     console.print(answer)
                     write_log(self.log_file, "final_answer", {"text": answer})
 
