@@ -37,6 +37,7 @@ load_dotenv()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama3.1:70b-instruct-q4_K_M")
+OLLAMA_KEEP_ALIVE = "5m"
 POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://user:pass@localhost:5432/postgres")
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 STATUS_API_URL = os.getenv("STATUS_API_URL", "http://localhost:8000")
@@ -222,6 +223,7 @@ def call_ollama_plan(question: str, log_file: str) -> Tuple[dict, dict, List[Dic
         "prompt": user_prompt,
         "system": SYSTEM_PROMPT,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": 0.1, "num_ctx": 8192},
         "response_format": {
             "type": "json_schema",
@@ -314,6 +316,7 @@ def call_ollama_fix_sql(
         "prompt": prompt,
         "system": SYSTEM_PROMPT,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
     }
     write_log(log_file, "llm_fix_request", {"url": url, "body": body})
 
@@ -429,6 +432,7 @@ def call_ollama_synthesis(
             "Ответ дай на русском языке."
         ),
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
     }
     write_log(log_file, "llm_synth_request", {"url": url, "body": body})
 
@@ -481,6 +485,7 @@ def call_ollama_review(
         "prompt": prompt,
         "system": "Ты — аналитик по закупкам. Ответь кратким обзором на русском.",
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
     }
     write_log(log_file, "llm_review_request", {"url": url, "body": body})
 
