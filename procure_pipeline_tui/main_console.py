@@ -629,7 +629,7 @@ class PipelineCLI:
                 first_step = steps_list[0]
             else:
                 first_step = {}
-            sql_query: str = ""
+
             if first_step.get("type") == "sql":
                 sql_query = strip_sql_block(first_step.get("sql"))
                 if sql_query:
